@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Locus — Function Plotter</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background: #f7f5f0;
+  }
+  #root { height: 100vh; display: flex; }
+  ::selection { background: rgba(0,0,0,0.15); }
+  input::selection { background: rgba(0,0,0,0.25); }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.25); border-radius: 5px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,0.4); }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .tweaks-panel {
+    position: fixed; bottom: 20px; right: 20px;
+    background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 10px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+    padding: 14px; width: 260px; z-index: 1000;
+    font-family: 'Inter', sans-serif;
+  }
+  .tweaks-panel h3 {
+    margin: 0 0 10px 0; font-size: 11px;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: #555; font-weight: 600;
+  }
+  .theme-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .theme-swatch {
+    aspect-ratio: 1; border-radius: 6px; cursor: pointer;
+    border: 2px solid transparent;
+    transition: transform 120ms, border-color 120ms;
+    position: relative; overflow: hidden;
+  }
+  .theme-swatch:hover { transform: translateY(-1px); }
+  .theme-swatch-label {
+    margin-top: 4px; font-size: 10px; color: #666;
+    text-align: center; font-family: 'JetBrains Mono', monospace;
+  }
+  .resize-bar { background: transparent; transition: background 120ms; }
+  .resize-handle:hover .resize-bar { background: rgba(128,128,128,0.35); }
+  body.resizing { cursor: col-resize !important; user-select: none; }
+  body.resizing * { cursor: col-resize !important; }
+
+  /* Sidebar collapse animation */
+  .sidebar-shell {
+    transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1);
+    overflow: hidden;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .sidebar-shell.animating-width { /* width transitions */ }
+  .sidebar-shell.no-anim { transition: none; }
+  .sidebar-content {
+    position: absolute; inset: 0;
+    transition: opacity 200ms ease, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .sidebar-content.hidden {
+    opacity: 0;
+    transform: translateX(-16px);
+    pointer-events: none;
+  }
+  .sidebar-rail {
+    position: absolute; inset: 0;
+    transition: opacity 200ms ease 120ms, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .sidebar-rail.hidden {
+    opacity: 0;
+    transform: translateX(-8px);
+    pointer-events: none;
+    transition: opacity 160ms ease, transform 200ms ease;
+  }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script>
+(function () {
+  const TOKEN = { NUM: 'NUM', ID: 'ID', OP: 'OP', LP: 'LP', RP: 'RP', COMMA: 'COMMA', END: 'END' };
+  function tokenize(src) {
+    const t = []; let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (/\s/.test(c)) { i++; continue; }
+      if (/[0-9.]/.test(c)) {
+        let j = i;
+        while (j < src.length && /[0-9.]/.test(src[j])) j++;
+        if (src[j] === 'e' || src[j] === 'E') {
+          j++; if (src[j] === '+' || src[j] === '-') j++;
+          while (j < src.length && /[0-9]/.test(src[j])) j++;
+        }
+        t.push({ k: TOKEN.NUM, v: parseFloat(src.slice(i, j)) }); i = j; continue;
+      }
+      if (/[A-Za-z_]/.test(c)) {
+        let j = i;
+        while (j < src.length && /[A-Za-z_0-9]/.test(src[j])) j++;
+        t.push({ k: TOKEN.ID, v: src.slice(i, j) }); i = j; continue;
+      }
+      if ('+-*/^%'.includes(c)) { t.push({ k: TOKEN.OP, v: c }); i++; continue; }
+      if (c === '(') { t.push({ k: TOKEN.LP }); i++; continue; }
+      if (c === ')') { t.push({ k: TOKEN.RP }); i++; continue; }
+      if (c === ',') { t.push({ k: TOKEN.COMMA }); i++; continue; }
+      if (c === '=') { t.push({ k: TOKEN.OP, v: '=' }); i++; continue; }
+      throw new Error('Unexpected character: ' + c);
+    }
+    t.push({ k: TOKEN.END }); return t;
+  }
+  function parse(src) {
+    const tokens = tokenize(src); let p = 0;
+    const peek = () => tokens[p];
+    const eat = (k) => { const t = tokens[p]; if (t.k !== k) throw new Error('Unexpected token'); p++; return t; };
+    function expr() { return addsub(); }
+    function addsub() {
+      let left = muldiv();
+      while (peek().k === TOKEN.OP && (peek().v === '+' || peek().v === '-')) {
+        const op = tokens[p++].v; const right = muldiv(); left = { op, left, right };
+      }
+      return left;
+    }
+    function muldiv() {
+      let left = unary();
+      while (peek().k === TOKEN.OP && (peek().v === '*' || peek().v === '/' || peek().v === '%')) {
+        const op = tokens[p++].v; const right = unary(); left = { op, left, right };
+      }
+      while (peek().k === TOKEN.ID || peek().k === TOKEN.LP || peek().k === TOKEN.NUM) {
+        const right = unary(); left = { op: '*', left, right };
+      }
+      return left;
+    }
+    function unary() {
+      if (peek().k === TOKEN.OP && peek().v === '-') { p++; return { op: 'neg', arg: unary() }; }
+      if (peek().k === TOKEN.OP && peek().v === '+') { p++; return unary(); }
+      return pow();
+    }
+    function pow() {
+      const base = atom();
+      if (peek().k === TOKEN.OP && peek().v === '^') { p++; const exp = unary(); return { op: '^', left: base, right: exp }; }
+      return base;
+    }
+    function atom() {
+      const t = peek();
+      if (t.k === TOKEN.NUM) { p++; return { num: t.v }; }
+      if (t.k === TOKEN.LP) { p++; const e = expr(); eat(TOKEN.RP); return e; }
+      if (t.k === TOKEN.ID) {
+        p++;
+        if (peek().k === TOKEN.LP) {
+          p++; const args = [];
+          if (peek().k !== TOKEN.RP) { args.push(expr()); while (peek().k === TOKEN.COMMA) { p++; args.push(expr()); } }
+          eat(TOKEN.RP); return { call: t.v, args };
+        }
+        return { id: t.v };
+      }
+      throw new Error('Unexpected token');
+    }
+    let lhsEnd = -1;
+    for (let i = 0; i < Math.min(tokens.length, 8); i++) {
+      if (tokens[i].k === TOKEN.OP && tokens[i].v === '=') { lhsEnd = i; break; }
+    }
+    if (lhsEnd >= 0) p = lhsEnd + 1;
+    const tree = expr();
+    if (peek().k !== TOKEN.END) throw new Error('Trailing tokens');
+    return tree;
+  }
+  function evalNode(node, scope) {
+    if (node.num !== undefined) return node.num;
+    if (node.id !== undefined) {
+      if (node.id in scope) return scope[node.id];
+      if (node.id in Math) return Math[node.id];
+      throw new Error('Unknown: ' + node.id);
+    }
+    if (node.call !== undefined) {
+      const fn = scope[node.call] || Math[node.call];
+      if (typeof fn !== 'function') throw new Error('Not a function: ' + node.call);
+      return fn(...node.args.map(a => evalNode(a, scope)));
+    }
+    if (node.op === 'neg') return -evalNode(node.arg, scope);
+    const L = evalNode(node.left, scope); const R = evalNode(node.right, scope);
+    switch (node.op) {
+      case '+': return L + R; case '-': return L - R;
+      case '*': return L * R; case '/': return L / R;
+      case '%': return L % R; case '^': return Math.pow(L, R);
+    }
+    throw new Error('Bad op: ' + node.op);
+  }
+  const EXTRA = {
+    ln: Math.log, log: (x, b) => b === undefined ? Math.log10(x) : Math.log(x) / Math.log(b),
+    sec: x => 1 / Math.cos(x), csc: x => 1 / Math.sin(x), cot: x => 1 / Math.tan(x),
+    pi: Math.PI, e: Math.E, tau: 2 * Math.PI,
+  };
+  window.LocusMath = {
+    parse,
+    compile(src) {
+      const tree = parse(src);
+      return (x, vars = {}) => evalNode(tree, { x, ...EXTRA, ...vars });
+    },
+  };
+})();
+
+window.LOCUS_THEMES = {
+  linen: {
+    name: 'Linen', bg: '#f7f5f0', panel: '#fbfaf6', ink: '#1a1917', muted: '#6d6a62',
+    rule: '#e6e2d7', ruleStrong: '#c9c3b2', gridMinor: '#ebe6d9', gridMajor: '#d4ccba',
+    axis: '#3a3732', accent: '#1a1917', chip: '#efece3',
+    funcPalette: ['oklch(62% 0.16 25)', 'oklch(62% 0.16 145)', 'oklch(62% 0.16 240)', 'oklch(62% 0.16 310)', 'oklch(62% 0.16 75)', 'oklch(62% 0.16 195)'],
+  },
+  graphite: {
+    name: 'Graphite', bg: '#131416', panel: '#1a1b1e', ink: '#ecebe7', muted: '#8a8a84',
+    rule: '#272829', ruleStrong: '#3a3b3d', gridMinor: '#212224', gridMajor: '#2e2f31',
+    axis: '#9a9a94', accent: '#ecebe7', chip: '#232427',
+    funcPalette: ['oklch(72% 0.17 25)', 'oklch(72% 0.17 145)', 'oklch(72% 0.17 240)', 'oklch(72% 0.17 310)', 'oklch(72% 0.17 75)', 'oklch(72% 0.17 195)'],
+  },
+  blueprint: {
+    name: 'Blueprint', bg: '#0f2a3f', panel: '#143348', ink: '#e8f1f7', muted: '#9cbbd0',
+    rule: '#1e4560', ruleStrong: '#2c597a', gridMinor: '#1b3f58', gridMajor: '#2a567a',
+    axis: '#c5dae8', accent: '#ffffff', chip: '#1a3d57',
+    funcPalette: ['oklch(80% 0.14 60)', 'oklch(80% 0.14 150)', 'oklch(80% 0.14 320)', 'oklch(80% 0.14 200)', 'oklch(80% 0.14 30)', 'oklch(80% 0.14 260)'],
+  },
+  paper: {
+    name: 'Paper', bg: '#fefdf9', panel: '#fffffc', ink: '#2a2520', muted: '#7a7366',
+    rule: '#ebe6d9', ruleStrong: '#d0c9b6', gridMinor: '#f1ecde', gridMajor: '#ddd4bf',
+    axis: '#4a4238', accent: '#b8471f', chip: '#f3eedf',
+    funcPalette: ['oklch(55% 0.15 30)', 'oklch(55% 0.13 160)', 'oklch(55% 0.15 255)', 'oklch(55% 0.15 300)', 'oklch(60% 0.12 90)', 'oklch(55% 0.14 210)'],
+  },
+  sunrise: {
+    name: 'Sunrise', bg: '#fff8f0', panel: '#ffffff', ink: '#241712', muted: '#7a5f52',
+    rule: '#f1e4d4', ruleStrong: '#d9c3aa', gridMinor: '#f6eadb', gridMajor: '#e4cdb2',
+    axis: '#3a2419', accent: '#d94a1f', chip: '#f8ecdc',
+    funcPalette: ['oklch(65% 0.20 30)', 'oklch(65% 0.18 140)', 'oklch(65% 0.18 260)', 'oklch(65% 0.20 340)', 'oklch(70% 0.17 90)', 'oklch(65% 0.18 200)'],
+  },
+};
+</script>
+
+<script type="text/babel">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "theme": "linen"
+}/*EDITMODE-END*/;
+
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+const RAIL_WIDTH = 48;
+
+const TrashIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.3">
+    <path d="M2.5 3.5h8M5 3.5V2.5a1 1 0 011-1h1a1 1 0 011 1v1M3.5 3.5v7a1 1 0 001 1h4a1 1 0 001-1v-7M5.5 5.5v4M7.5 5.5v4"/>
+  </svg>
+);
+const PlusIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
+    <path d="M6 2v8M2 6h8"/>
+  </svg>
+);
+const ChevronLeft = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M7.5 2.5L4 6l3.5 3.5"/>
+  </svg>
+);
+const ChevronRight = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4.5 2.5L8 6l-3.5 3.5"/>
+  </svg>
+);
+const LocusMark = ({ color }) => (
+  <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke={color} strokeWidth="1.3" strokeLinecap="round">
+    <circle cx="15" cy="15" r="1.5" fill={color} stroke="none"/>
+    <path d="M3 15a12 12 0 0112-12"/>
+    <path d="M6 15a9 9 0 019-9"/>
+    <path d="M9 15a6 6 0 016-6"/>
+  </svg>
+);
+
+function PlotCanvas({ functions, view, setView, theme, onTrace }) {
+  const canvasRef = useRef(null);
+  const wrapRef = useRef(null);
+  const [size, setSize] = useState({ w: 800, h: 600 });
+  const [mouse, setMouse] = useState(null);
+  const draggingRef = useRef(null);
+
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    const ro = new ResizeObserver(() => {
+      const r = wrapRef.current.getBoundingClientRect();
+      setSize({ w: Math.floor(r.width), h: Math.floor(r.height) });
+    });
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const worldToScreen = useCallback((wx, wy) => {
+    const { cx, cy, scale } = view;
+    return [size.w / 2 + (wx - cx) * scale, size.h / 2 - (wy - cy) * scale];
+  }, [view, size]);
+  const screenToWorld = useCallback((sx, sy) => {
+    const { cx, cy, scale } = view;
+    return [cx + (sx - size.w / 2) / scale, cy - (sy - size.h / 2) / scale];
+  }, [view, size]);
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = size.w * dpr;
+    canvas.height = size.h * dpr;
+    canvas.style.width = size.w + 'px';
+    canvas.style.height = size.h + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = theme.bg;
+    ctx.fillRect(0, 0, size.w, size.h);
+
+    const { scale } = view;
+    const targetPx = 80;
+    const roughStep = targetPx / scale;
+    const pow = Math.pow(10, Math.floor(Math.log10(roughStep)));
+    const normalized = roughStep / pow;
+    let step;
+    if (normalized < 1.5) step = pow;
+    else if (normalized < 3.5) step = 2 * pow;
+    else if (normalized < 7.5) step = 5 * pow;
+    else step = 10 * pow;
+    const minorStep = step / 5;
+
+    const [wxMin, wyMax] = screenToWorld(0, 0);
+    const [wxMax, wyMin] = screenToWorld(size.w, size.h);
+
+    const drawGridLines = (st, color, width) => {
+      ctx.strokeStyle = color; ctx.lineWidth = width;
+      ctx.beginPath();
+      const startX = Math.ceil(wxMin / st) * st;
+      for (let x = startX; x <= wxMax; x += st) {
+        const [sx] = worldToScreen(x, 0);
+        ctx.moveTo(sx + 0.5, 0); ctx.lineTo(sx + 0.5, size.h);
+      }
+      const startY = Math.ceil(wyMin / st) * st;
+      for (let y = startY; y <= wyMax; y += st) {
+        const [, sy] = worldToScreen(0, y);
+        ctx.moveTo(0, sy + 0.5); ctx.lineTo(size.w, sy + 0.5);
+      }
+      ctx.stroke();
+    };
+    drawGridLines(minorStep, theme.gridMinor, 1);
+    drawGridLines(step, theme.gridMajor, 1);
+
+    ctx.strokeStyle = theme.axis; ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    const [, ax0Y] = worldToScreen(0, 0);
+    const [ax0X] = worldToScreen(0, 0);
+    if (ax0Y >= 0 && ax0Y <= size.h) { ctx.moveTo(0, ax0Y + 0.5); ctx.lineTo(size.w, ax0Y + 0.5); }
+    if (ax0X >= 0 && ax0X <= size.w) { ctx.moveTo(ax0X + 0.5, 0); ctx.lineTo(ax0X + 0.5, size.h); }
+    ctx.stroke();
+
+    ctx.fillStyle = theme.muted;
+    ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const fmtTick = (v) => {
+      if (Math.abs(v) < 1e-10) return '0';
+      const abs = Math.abs(v);
+      if (abs >= 1e5 || abs < 1e-3) return v.toExponential(1);
+      const digits = step < 1 ? Math.max(0, -Math.floor(Math.log10(step))) : 0;
+      return v.toFixed(digits);
+    };
+    const startX = Math.ceil(wxMin / step) * step;
+    for (let x = startX; x <= wxMax; x += step) {
+      if (Math.abs(x) < step * 0.001) continue;
+      const [sx] = worldToScreen(x, 0);
+      const yLabel = Math.max(4, Math.min(size.h - 16, ax0Y + 4));
+      ctx.fillText(fmtTick(x), sx, yLabel);
+    }
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    const startY = Math.ceil(wyMin / step) * step;
+    for (let y = startY; y <= wyMax; y += step) {
+      if (Math.abs(y) < step * 0.001) continue;
+      const [, sy] = worldToScreen(0, y);
+      const xLabel = Math.max(24, Math.min(size.w - 4, ax0X - 6));
+      ctx.fillText(fmtTick(y), xLabel, sy);
+    }
+    if (ax0X >= 0 && ax0X <= size.w && ax0Y >= 0 && ax0Y <= size.h) {
+      ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+      ctx.fillText('0', ax0X - 4, ax0Y + 4);
+    }
+
+    functions.forEach((fn) => {
+      if (!fn.visible || !fn.compiled) return;
+      ctx.strokeStyle = fn.color;
+      ctx.lineWidth = fn.thickness || 2;
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath();
+      const samples = size.w * 2;
+      let prev = null;
+      for (let i = 0; i <= samples; i++) {
+        const sx = (i / samples) * size.w;
+        const [wx] = screenToWorld(sx, 0);
+        let wy;
+        try { wy = fn.compiled(wx); } catch { wy = NaN; }
+        if (!isFinite(wy)) { prev = null; continue; }
+        const [, sy] = worldToScreen(wx, wy);
+        if (prev && Math.abs(sy - prev[1]) > size.h * 1.5) prev = null;
+        if (prev == null) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+        prev = [sx, sy];
+      }
+      ctx.stroke();
+    });
+
+    if (mouse) {
+      const [wx] = screenToWorld(mouse.x, mouse.y);
+      let closest = null;
+      functions.forEach((fn) => {
+        if (!fn.visible || !fn.compiled) return;
+        try {
+          const wy = fn.compiled(wx);
+          if (!isFinite(wy)) return;
+          const [, sy] = worldToScreen(wx, wy);
+          const d = Math.abs(sy - mouse.y);
+          if (closest == null || d < closest.d) closest = { fn, wx, wy, sy, d };
+        } catch {}
+      });
+      if (closest && closest.d < 60) {
+        const [sxp] = worldToScreen(closest.wx, closest.wy);
+        ctx.strokeStyle = theme.ruleStrong; ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(sxp, 0); ctx.lineTo(sxp, size.h);
+        ctx.moveTo(0, closest.sy); ctx.lineTo(size.w, closest.sy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = closest.fn.color;
+        ctx.beginPath(); ctx.arc(sxp, closest.sy, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = theme.panel; ctx.lineWidth = 2; ctx.stroke();
+        const label = `(${closest.wx.toFixed(3)}, ${closest.wy.toFixed(3)})`;
+        ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
+        const metrics = ctx.measureText(label);
+        const padX = 8;
+        let lx = sxp + 12; let ly = closest.sy - 28;
+        if (lx + metrics.width + padX * 2 > size.w) lx = sxp - metrics.width - padX * 2 - 12;
+        if (ly < 4) ly = closest.sy + 12;
+        ctx.fillStyle = theme.ink;
+        ctx.fillRect(lx, ly, metrics.width + padX * 2, 22);
+        ctx.fillStyle = theme.bg;
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillText(label, lx + padX, ly + 11);
+        if (onTrace) onTrace({ fn: closest.fn, x: closest.wx, y: closest.wy });
+      } else {
+        if (onTrace) onTrace(null);
+      }
+    }
+  }, [functions, view, size, theme, mouse, worldToScreen, screenToWorld, onTrace]);
+
+  useEffect(() => { draw(); }, [draw]);
+
+  const onMouseDown = (e) => { draggingRef.current = { x: e.clientX, y: e.clientY, view: { ...view } }; };
+  const onMouseMove = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    setMouse({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    if (draggingRef.current) {
+      const dx = e.clientX - draggingRef.current.x;
+      const dy = e.clientY - draggingRef.current.y;
+      setView({
+        ...draggingRef.current.view,
+        cx: draggingRef.current.view.cx - dx / view.scale,
+        cy: draggingRef.current.view.cy + dy / view.scale,
+      });
+    }
+  };
+  const onMouseUp = () => { draggingRef.current = null; };
+  const onMouseLeave = () => { draggingRef.current = null; setMouse(null); if (onTrace) onTrace(null); };
+  const onWheel = (e) => {
+    e.preventDefault();
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const [wxBefore, wyBefore] = screenToWorld(mx, my);
+    const factor = Math.exp(-e.deltaY * 0.0015);
+    const newScale = Math.max(0.5, Math.min(4000, view.scale * factor));
+    const newCx = wxBefore - (mx - size.w / 2) / newScale;
+    const newCy = wyBefore + (my - size.h / 2) / newScale;
+    setView({ cx: newCx, cy: newCy, scale: newScale });
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+      <canvas
+        ref={canvasRef}
+        onMouseDown={onMouseDown} onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp} onMouseLeave={onMouseLeave}
+        onWheel={onWheel}
+        style={{ display: 'block', cursor: draggingRef.current ? 'grabbing' : 'crosshair' }}
+      />
+    </div>
+  );
+}
+
+function FunctionRow({ fn, index, theme, onChange, onDelete, isOnly }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(fn.expr);
+  const inputRef = useRef(null);
+  useEffect(() => { setDraft(fn.expr); }, [fn.expr]);
+  useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
+  const commit = () => { onChange({ ...fn, expr: draft }); setEditing(false); };
+  const hasError = !!fn.error;
+  const label = ['f', 'g', 'h', 'p', 'q', 'r'][index % 6];
+  const sub = '₁₂₃₄₅₆₇₈₉'[Math.floor(index / 6)] || '';
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'stretch',
+      borderBottom: `1px solid ${theme.rule}`,
+      background: theme.panel,
+    }}>
+      <button
+        onClick={() => onChange({ ...fn, visible: !fn.visible })}
+        title={fn.visible ? 'Hide' : 'Show'}
+        style={{
+          width: 36, border: 'none', cursor: 'pointer', background: 'transparent',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          borderRight: `1px solid ${theme.rule}`,
+        }}
+      >
+        <div style={{
+          width: 14, height: 14, borderRadius: 14,
+          background: fn.visible ? fn.color : 'transparent',
+          border: fn.visible ? 'none' : `1.5px dashed ${theme.ruleStrong}`,
+          transition: 'all 150ms',
+        }}/>
+      </button>
+
+      <div style={{ flex: 1, padding: '10px 10px 10px 12px', minWidth: 0 }}>
+        <div style={{
+          fontFamily: '"JetBrains Mono", monospace', fontSize: 11,
+          color: theme.muted, letterSpacing: '0.02em',
+          opacity: fn.visible ? 1 : 0.45,
+        }}>
+          {label}{sub}(x) =
+        </div>
+        {editing ? (
+          <input
+            ref={inputRef} value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commit();
+              if (e.key === 'Escape') { setDraft(fn.expr); setEditing(false); }
+            }}
+            style={{
+              width: '100%', border: 'none', outline: 'none', background: 'transparent',
+              fontFamily: '"JetBrains Mono", monospace', fontSize: 14, color: theme.ink,
+              padding: '2px 0', marginTop: 2,
+              borderBottom: `1.5px solid ${fn.color}`,
+            }}
+          />
+        ) : (
+          <div
+            onClick={() => setEditing(true)}
+            style={{
+              fontFamily: '"JetBrains Mono", monospace', fontSize: 14,
+              color: hasError ? '#c94a3a' : theme.ink,
+              cursor: 'text', padding: '2px 0', marginTop: 2,
+              opacity: fn.visible ? 1 : 0.45, wordBreak: 'break-word',
+            }}
+          >
+            {fn.expr || <span style={{ color: theme.muted }}>tap to enter…</span>}
+          </div>
+        )}
+        {hasError && (
+          <div style={{ fontSize: 11, color: '#c94a3a', marginTop: 3, fontFamily: '"JetBrains Mono", monospace' }}>
+            {fn.error}
+          </div>
+        )}
+      </div>
+
+      {!isOnly && (
+        <button
+          onClick={onDelete} title="Remove"
+          style={{
+            width: 32, border: 'none', background: 'transparent',
+            color: theme.muted, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            opacity: 0.5,
+          }}
+          onMouseEnter={e => e.currentTarget.style.opacity = 1}
+          onMouseLeave={e => e.currentTarget.style.opacity = 0.5}
+        >
+          <TrashIcon/>
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SidebarButton({ children, onClick, theme }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        padding: '6px 10px',
+        background: hover ? theme.chip : 'transparent',
+        border: `1px solid ${theme.rule}`, borderRadius: 4,
+        color: theme.ink, fontFamily: 'Inter, sans-serif',
+        fontSize: 11, cursor: 'pointer', transition: 'background 120ms',
+      }}
+    >{children}</button>
+  );
+}
+
+function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, traceInfo, onExport, onCollapse, width, themeKey, pickTheme }) {
+  const addFn = () => {
+    const palette = theme.funcPalette;
+    const color = palette[functions.length % palette.length];
+    setFunctions([...functions, {
+      id: Math.random().toString(36).slice(2, 9),
+      expr: '', visible: true, color, thickness: 2,
+    }]);
+  };
+  const updateFn = (idx, next) => {
+    const copy = [...functions]; copy[idx] = next; setFunctions(copy);
+  };
+  const deleteFn = (idx) => setFunctions(functions.filter((_, i) => i !== idx));
+  const resetView = () => setView({ cx: 0, cy: 0, scale: 50 });
+
+  return (
+    <div style={{
+      width, height: '100%',
+      background: theme.panel,
+      display: 'flex', flexDirection: 'column',
+    }}>
+      <div style={{
+        padding: '18px 16px 14px 16px',
+        borderBottom: `1px solid ${theme.rule}`,
+        display: 'flex', alignItems: 'center', gap: 10,
+      }}>
+        <LocusMark color={theme.ink}/>
+        <div style={{ lineHeight: 1, flex: 1 }}>
+          <div style={{
+            fontFamily: 'Inter, sans-serif', fontSize: 17, fontWeight: 600,
+            color: theme.ink, letterSpacing: '-0.01em',
+          }}>Locus</div>
+          <div style={{
+            fontFamily: '"JetBrains Mono", monospace',
+            fontSize: 10, color: theme.muted, marginTop: 3,
+            letterSpacing: '0.08em', textTransform: 'uppercase',
+          }}>function plotter</div>
+        </div>
+        <button
+          onClick={onCollapse}
+          title="Collapse sidebar"
+          style={{
+            width: 28, height: 28, border: `1px solid ${theme.rule}`,
+            background: 'transparent', borderRadius: 4, cursor: 'pointer',
+            color: theme.ink, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <ChevronLeft/>
+        </button>
+      </div>
+
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '14px 16px 8px 16px',
+      }}>
+        <div style={{
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: 10, color: theme.muted,
+          letterSpacing: '0.1em', textTransform: 'uppercase',
+        }}>Functions · {functions.length}</div>
+        <button
+          onClick={addFn} title="Add function"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 4,
+            padding: '4px 8px', background: 'transparent',
+            border: `1px solid ${theme.rule}`, borderRadius: 4,
+            color: theme.ink, fontFamily: 'Inter, sans-serif',
+            fontSize: 11, cursor: 'pointer',
+          }}
+          onMouseEnter={e => e.currentTarget.style.borderColor = theme.ruleStrong}
+          onMouseLeave={e => e.currentTarget.style.borderColor = theme.rule}
+        >
+          <PlusIcon/> Add
+        </button>
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', borderTop: `1px solid ${theme.rule}` }}>
+        {functions.map((fn, i) => (
+          <FunctionRow
+            key={fn.id}
+            fn={fn} index={i} theme={theme}
+            onChange={(next) => updateFn(i, next)}
+            onDelete={() => deleteFn(i)}
+            isOnly={functions.length === 1}
+          />
+        ))}
+        {functions.length === 0 && (
+          <div style={{ padding: '20px 16px', color: theme.muted, fontSize: 12 }}>
+            No functions yet. Add one to get started.
+          </div>
+        )}
+      </div>
+
+      <div style={{ borderTop: `1px solid ${theme.rule}` }}>
+        <div style={{
+          padding: '10px 16px',
+          borderBottom: `1px solid ${theme.rule}`,
+          fontFamily: '"JetBrains Mono", monospace', fontSize: 11,
+          minHeight: 38, display: 'flex', alignItems: 'center',
+        }}>
+          {traceInfo ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 8, background: traceInfo.fn.color }}/>
+              <span style={{ color: theme.muted }}>x</span>
+              <span style={{ color: theme.ink }}>{traceInfo.x.toFixed(4)}</span>
+              <span style={{ color: theme.muted, marginLeft: 6 }}>y</span>
+              <span style={{ color: theme.ink }}>{traceInfo.y.toFixed(4)}</span>
+            </div>
+          ) : (
+            <div style={{ color: theme.muted, fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+              hover canvas to trace
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: '12px 16px 6px 16px' }}>
+          <div style={{
+            fontFamily: '"JetBrains Mono", monospace',
+            fontSize: 10, color: theme.muted,
+            letterSpacing: '0.1em', textTransform: 'uppercase',
+            marginBottom: 8,
+          }}>Theme</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {Object.entries(window.LOCUS_THEMES).map(([key, t]) => {
+              const active = themeKey === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => pickTheme(key)}
+                  title={t.name}
+                  style={{
+                    flex: 1, aspectRatio: '1',
+                    border: active ? `2px solid ${theme.ink}` : `1px solid ${theme.rule}`,
+                    borderRadius: 4, cursor: 'pointer', padding: 3,
+                    background: t.bg, position: 'relative',
+                    transition: 'border-color 150ms, transform 120ms',
+                  }}
+                  onMouseEnter={e => { if (!active) e.currentTarget.style.borderColor = theme.ruleStrong; }}
+                  onMouseLeave={e => { if (!active) e.currentTarget.style.borderColor = theme.rule; }}
+                >
+                  <div style={{
+                    position: 'absolute', inset: 4,
+                    display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2,
+                  }}>
+                    {t.funcPalette.slice(0, 3).map((c, i) => (
+                      <div key={i} style={{ background: c, borderRadius: 1 }}/>
+                    ))}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <div style={{
+            marginTop: 6,
+            fontFamily: 'Inter, sans-serif', fontSize: 10.5,
+            color: theme.muted, textAlign: 'center',
+          }}>
+            {window.LOCUS_THEMES[themeKey].name}
+          </div>
+        </div>
+
+        <div style={{ padding: '6px 16px 12px 16px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <SidebarButton theme={theme} onClick={() => setView({ ...view, scale: view.scale * 1.4 })}>Zoom +</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => setView({ ...view, scale: view.scale / 1.4 })}>Zoom −</SidebarButton>
+          <SidebarButton theme={theme} onClick={resetView}>Reset view</SidebarButton>
+          <SidebarButton theme={theme} onClick={onExport}>Export PNG</SidebarButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CollapsedRailInner({ functions, theme, onExpand }) {
+  return (
+    <div style={{
+      width: RAIL_WIDTH, height: '100%',
+      background: theme.panel,
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      paddingTop: 14,
+    }}>
+      <button
+        onClick={onExpand}
+        title="Expand sidebar"
+        style={{
+          width: 32, height: 32, border: `1px solid ${theme.rule}`,
+          background: 'transparent', borderRadius: 4, cursor: 'pointer',
+          color: theme.ink, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          marginBottom: 14,
+        }}
+      >
+        <ChevronRight/>
+      </button>
+      <div style={{ marginBottom: 14 }}>
+        <LocusMark color={theme.ink}/>
+      </div>
+      <div style={{
+        width: '100%',
+        borderTop: `1px solid ${theme.rule}`,
+        paddingTop: 12,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+      }}>
+        {functions.map((fn, i) => (
+          <div
+            key={fn.id}
+            title={`${['f','g','h','p','q','r'][i%6]}(x) = ${fn.expr}`}
+            style={{
+              width: 12, height: 12, borderRadius: 12,
+              background: fn.visible ? fn.color : 'transparent',
+              border: fn.visible ? 'none' : `1.5px dashed ${theme.ruleStrong}`,
+            }}
+          />
+        ))}
+      </div>
+      <div style={{
+        marginTop: 'auto', padding: '10px 0',
+        writingMode: 'vertical-rl',
+        transform: 'rotate(180deg)',
+        fontFamily: '"JetBrains Mono", monospace',
+        fontSize: 9, color: theme.muted,
+        letterSpacing: '0.2em', textTransform: 'uppercase',
+      }}>
+        Locus
+      </div>
+    </div>
+  );
+}
+
+// ───── Animated shell: handles smooth width transition + crossfade ─────
+function SidebarShell(props) {
+  const { collapsed, expandedWidth, theme, onResizeStart, resizing } = props;
+  const currentWidth = collapsed ? RAIL_WIDTH : expandedWidth;
+  const expandedSnapshotRef = useRef(expandedWidth);
+  // Keep the expanded snapshot stable during collapse so content doesn't reflow
+  if (!collapsed) expandedSnapshotRef.current = expandedWidth;
+
+  return (
+    <div
+      className={`sidebar-shell ${resizing ? 'no-anim' : ''}`}
+      style={{
+        width: currentWidth,
+        borderRight: `1px solid ${theme.rule}`,
+        background: theme.panel,
+      }}
+    >
+      {/* Expanded content — stays mounted, crossfades */}
+      <div
+        className={`sidebar-content ${collapsed ? 'hidden' : ''}`}
+        style={{ width: expandedSnapshotRef.current }}
+      >
+        <ExpandedSidebarInner {...props} width={expandedSnapshotRef.current} />
+      </div>
+      {/* Collapsed rail */}
+      <div className={`sidebar-rail ${collapsed ? '' : 'hidden'}`}>
+        <CollapsedRailInner
+          functions={props.functions}
+          theme={theme}
+          onExpand={props.onExpand}
+        />
+      </div>
+      {/* Resize handle — only when expanded */}
+      {!collapsed && (
+        <div
+          className="resize-handle"
+          onMouseDown={onResizeStart}
+          title="Drag to resize"
+          style={{
+            position: 'absolute',
+            top: 0, right: -3, bottom: 0,
+            width: 6, cursor: 'col-resize', zIndex: 10,
+          }}
+        >
+          <div className="resize-bar" style={{
+            position: 'absolute', top: 0, bottom: 0, left: 3, width: 1,
+          }}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const DEFAULT_FUNCTIONS = [
+  { expr: 'sin(x)' },
+  { expr: '0.5 * x^2 - 2' },
+  { expr: 'cos(x) * e^(-0.1 * x^2)' },
+];
+
+function App() {
+  const [themeKey, setThemeKey] = useState(() => {
+    try {
+      const stored = localStorage.getItem('locus:theme');
+      if (stored && window.LOCUS_THEMES[stored]) return stored;
+    } catch {}
+    return TWEAK_DEFAULTS.theme;
+  });
+  const theme = window.LOCUS_THEMES[themeKey] || window.LOCUS_THEMES.linen;
+
+  const [functions, setFunctions] = useState(() => {
+    try {
+      const s = localStorage.getItem('locus:functions');
+      if (s) {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed) && parsed.length) return parsed;
+      }
+    } catch {}
+    const palette = window.LOCUS_THEMES[TWEAK_DEFAULTS.theme].funcPalette;
+    return DEFAULT_FUNCTIONS.map((f, i) => ({
+      id: Math.random().toString(36).slice(2, 9),
+      expr: f.expr, visible: true,
+      color: palette[i % palette.length], thickness: 2,
+    }));
+  });
+
+  const [view, setView] = useState(() => {
+    try {
+      const s = localStorage.getItem('locus:view');
+      if (s) return JSON.parse(s);
+    } catch {}
+    return { cx: 0, cy: 0, scale: 50 };
+  });
+
+  const [traceInfo, setTraceInfo] = useState(null);
+  const [showTweaks, setShowTweaks] = useState(false);
+
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const s = localStorage.getItem('locus:sidebarWidth');
+      if (s) return Math.max(260, Math.min(600, parseInt(s, 10) || 340));
+    } catch {}
+    return 340;
+  });
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('locus:collapsed') === '1'; } catch { return false; }
+  });
+  const [resizing, setResizing] = useState(false);
+
+  useEffect(() => { try { localStorage.setItem('locus:theme', themeKey); } catch {} }, [themeKey]);
+  useEffect(() => { try { localStorage.setItem('locus:functions', JSON.stringify(functions)); } catch {} }, [functions]);
+  useEffect(() => { try { localStorage.setItem('locus:view', JSON.stringify(view)); } catch {} }, [view]);
+  useEffect(() => { try { localStorage.setItem('locus:sidebarWidth', String(sidebarWidth)); } catch {} }, [sidebarWidth]);
+  useEffect(() => { try { localStorage.setItem('locus:collapsed', collapsed ? '1' : '0'); } catch {} }, [collapsed]);
+
+  const onResizeStart = (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    setResizing(true);
+    document.body.classList.add('resizing');
+    const onMove = (ev) => {
+      const w = Math.max(260, Math.min(600, startW + (ev.clientX - startX)));
+      setSidebarWidth(w);
+    };
+    const onUp = () => {
+      setResizing(false);
+      document.body.classList.remove('resizing');
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const compiledFunctions = useMemo(() => {
+    return functions.map(f => {
+      if (!f.expr || !f.expr.trim()) return { ...f, compiled: null, error: null };
+      try {
+        const compiled = window.LocusMath.compile(f.expr);
+        compiled(0);
+        return { ...f, compiled, error: null };
+      } catch (err) {
+        return { ...f, compiled: null, error: err.message || 'Invalid expression' };
+      }
+    });
+  }, [functions]);
+
+  const prevThemeRef = useRef(themeKey);
+  useEffect(() => {
+    if (prevThemeRef.current === themeKey) return;
+    prevThemeRef.current = themeKey;
+    setFunctions(prev => prev.map((f, i) => ({
+      ...f, color: theme.funcPalette[i % theme.funcPalette.length],
+    })));
+  }, [themeKey, theme]);
+
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (!e.data) return;
+      if (e.data.type === '__activate_edit_mode') setShowTweaks(true);
+      if (e.data.type === '__deactivate_edit_mode') setShowTweaks(false);
+    };
+    window.addEventListener('message', onMsg);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  const pickTheme = (key) => {
+    setThemeKey(key);
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { theme: key } }, '*');
+  };
+
+  const exportPNG = () => {
+    const canvas = document.querySelector('canvas');
+    if (!canvas) return;
+    const link = document.createElement('a');
+    link.download = `locus-plot-${Date.now()}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  };
+
+  const setFunctionsFromSidebar = (next) => {
+    const arr = typeof next === 'function' ? next(compiledFunctions) : next;
+    setFunctions(arr.map(f => ({
+      id: f.id, expr: f.expr, visible: f.visible, color: f.color, thickness: f.thickness,
+    })));
+  };
+
+  return (
+    <div style={{ display: 'flex', width: '100%', height: '100%', background: theme.bg }}>
+      <SidebarShell
+        functions={compiledFunctions}
+        setFunctions={setFunctionsFromSidebar}
+        theme={theme}
+        themeKey={themeKey}
+        pickTheme={pickTheme}
+        view={view}
+        setView={setView}
+        traceInfo={traceInfo}
+        onExport={exportPNG}
+        collapsed={collapsed}
+        expandedWidth={sidebarWidth}
+        onCollapse={() => setCollapsed(true)}
+        onExpand={() => setCollapsed(false)}
+        onResizeStart={onResizeStart}
+        resizing={resizing}
+      />
+
+      <main style={{ flex: 1, position: 'relative', background: theme.bg, minWidth: 0 }}>
+        <PlotCanvas
+          functions={compiledFunctions}
+          view={view} setView={setView}
+          theme={theme} onTrace={setTraceInfo}
+        />
+        <div style={{
+          position: 'absolute', top: 16, right: 16,
+          padding: '6px 10px',
+          background: theme.panel, border: `1px solid ${theme.rule}`,
+          borderRadius: 4,
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase',
+          color: theme.muted,
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <span style={{ width: 8, height: 8, borderRadius: 8, background: theme.accent }}/>
+          {theme.name}
+        </div>
+        <div style={{
+          position: 'absolute', bottom: 14, left: 14,
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: 10, color: theme.muted,
+          letterSpacing: '0.06em', userSelect: 'none',
+          display: 'flex', gap: 14,
+        }}>
+          <span>drag · pan</span>
+          <span>scroll · zoom</span>
+          <span>hover · trace</span>
+        </div>
+      </main>
+
+      {showTweaks && (
+        <div className="tweaks-panel" style={{ color: '#111' }}>
+          <h3>Tweaks</h3>
+          <div style={{ fontSize: 11, color: '#666', marginBottom: 8 }}>Color theme</div>
+          <div className="theme-grid">
+            {Object.entries(window.LOCUS_THEMES).map(([key, t]) => (
+              <div key={key}>
+                <div
+                  className="theme-swatch"
+                  onClick={() => pickTheme(key)}
+                  title={t.name}
+                  style={{
+                    background: t.bg,
+                    border: themeKey === key ? `2px solid #111` : `2px solid rgba(0,0,0,0.08)`,
+                  }}
+                >
+                  <div style={{
+                    position: 'absolute', inset: 4,
+                    display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2,
+                  }}>
+                    {t.funcPalette.slice(0, 3).map((c, i) => (
+                      <div key={i} style={{ background: c, borderRadius: 2 }}/>
+                    ))}
+                  </div>
+                </div>
+                <div className="theme-swatch-label">{t.name}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{
+            marginTop: 12, paddingTop: 10,
+            borderTop: '1px solid rgba(0,0,0,0.08)',
+            fontSize: 10, color: '#888', lineHeight: 1.5,
+          }}>
+            Each theme ships a harmonized function palette (shared chroma & lightness, varied hue).
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+
+</body>
+</html>
