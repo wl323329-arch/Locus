@@ -28,13 +28,13 @@
   ::-webkit-scrollbar-track { background: transparent; }
 
   .tweaks-panel {
-    position: fixed; bottom: 20px; right: 20px;
-    background: rgba(255, 255, 255, 0.98);
+    position: absolute; top: 54px; right: 16px;
+    background: rgba(255, 255, 255, 0.985);
     backdrop-filter: blur(10px);
     border: 1px solid rgba(0,0,0,0.1);
-    border-radius: 10px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-    padding: 14px; width: 260px; z-index: 1000;
+    border-radius: 8px;
+    box-shadow: 0 10px 32px rgba(0,0,0,0.16);
+    padding: 12px; width: 220px; z-index: 1000;
     font-family: 'Inter', sans-serif;
   }
   .tweaks-panel h3 {
@@ -42,7 +42,7 @@
     letter-spacing: 0.1em; text-transform: uppercase;
     color: #555; font-weight: 600;
   }
-  .theme-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
   .theme-swatch {
     aspect-ratio: 1; border-radius: 6px; cursor: pointer;
     border: 2px solid transparent;
@@ -53,6 +53,39 @@
   .theme-swatch-label {
     margin-top: 4px; font-size: 10px; color: #666;
     text-align: center; font-family: 'JetBrains Mono', monospace;
+  }
+  .popover-grow {
+    transform-origin: top right;
+    animation: popover-grow 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .coord-mode-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid rgba(0,0,0,0.08);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.96);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+  }
+  .coord-mode-switch button {
+    border: none;
+    background: transparent;
+    border-radius: 4px;
+    padding: 5px 8px;
+    cursor: pointer;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    transition: background 160ms, color 160ms, opacity 160ms;
+  }
+  .coord-mode-switch button.active {
+    background: rgba(0,0,0,0.08);
+  }
+  @keyframes popover-grow {
+    from { opacity: 0; transform: translateY(-6px) scale(0.92); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
   }
   .resize-bar { background: transparent; transition: background 120ms; }
   .resize-handle:hover .resize-bar { background: rgba(128,128,128,0.35); }
@@ -87,6 +120,13 @@
     pointer-events: none;
     transition: opacity 160ms ease, transform 200ms ease;
   }
+
+  button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  canvas { touch-action: none; }
 </style>
 </head>
 <body>
@@ -291,12 +331,285 @@ const LocusMark = ({ color }) => (
   </svg>
 );
 
-function PlotCanvas({ functions, view, setView, theme, onTrace }) {
+const COORD_MODES = {
+  exact: 'exact',
+  decimal: 'decimal',
+};
+
+function gcd(a, b) {
+  a = Math.abs(a); b = Math.abs(b);
+  while (b) [a, b] = [b, a % b];
+  return a || 1;
+}
+
+function trimDecimal(text) {
+  return text.replace(/(\.\d*?[1-9])0+$/u, '$1').replace(/\.0+$/u, '');
+}
+
+function formatDecimalNumber(value) {
+  if (Math.abs(value) < 1e-10) return '0';
+  const abs = Math.abs(value);
+  if (abs >= 1e5 || abs < 1e-4) return value.toExponential(3).replace('+', '');
+  return trimDecimal(value.toFixed(abs < 1 ? 4 : 3));
+}
+
+function bestFraction(value, maxDen = 64) {
+  let best = { num: Math.round(value), den: 1, err: Math.abs(value - Math.round(value)) };
+  for (let den = 1; den <= maxDen; den++) {
+    const num = Math.round(value * den);
+    const err = Math.abs(value - num / den);
+    if (err < best.err) best = { num, den, err };
+  }
+  const factor = gcd(best.num, best.den);
+  return { num: best.num / factor, den: best.den / factor, err: best.err };
+}
+
+function formatFraction(num, den, suffix = '') {
+  if (num === 0) return '0';
+  const sign = num < 0 ? '-' : '';
+  const absNum = Math.abs(num);
+  if (suffix) {
+    if (den === 1 && absNum === 1) return `${sign}${suffix}`;
+    if (den === 1) return `${sign}${absNum}${suffix}`;
+    if (absNum === 1) return `${sign}${suffix}/${den}`;
+    return `${sign}${absNum}${suffix}/${den}`;
+  }
+  return den === 1 ? `${num}` : `${num}/${den}`;
+}
+
+function formatExactNumber(value) {
+  if (Math.abs(value) < 1e-10) return '0';
+  const constants = [
+    { base: Math.PI, symbol: 'π' },
+    { base: Math.E, symbol: 'e' },
+  ];
+  for (const { base, symbol } of constants) {
+    const ratio = value / base;
+    const frac = bestFraction(ratio, 24);
+    const tolerance = Math.max(1e-6, Math.abs(value) * 2e-4);
+    if (frac.err * Math.abs(base) < tolerance) return formatFraction(frac.num, frac.den, symbol);
+  }
+  const frac = bestFraction(value, 96);
+  return formatFraction(frac.num, frac.den);
+}
+
+function formatCoordinateValue(value, mode) {
+  return mode === COORD_MODES.exact ? formatExactNumber(value) : formatDecimalNumber(value);
+}
+
+function formatPointLabel(x, y, mode) {
+  return `(${formatCoordinateValue(x, mode)}, ${formatCoordinateValue(y, mode)})`;
+}
+
+function getPointKey(point) {
+  const ids = [point.fnId, point.fn2Id].filter(Boolean).sort().join('|');
+  return `${point.type}:${point.x.toFixed(6)}:${point.y.toFixed(6)}:${ids}`;
+}
+
+const FUNC_SUBSCRIPTS = ['₀','₁','₂','₃','₄','₅','₆','₇','₈','₉'];
+
+function formatFnLabel(seq) {
+  const n = Number.isFinite(seq) ? seq + 1 : 1;
+  return 'f' + String(n).split('').map(d => FUNC_SUBSCRIPTS[+d] || d).join('');
+}
+
+function nextFreeSeq(fns) {
+  const used = new Set(fns.map(f => f.labelSeq).filter(n => Number.isFinite(n)));
+  let i = 0;
+  while (used.has(i)) i++;
+  return i;
+}
+
+function nextFreeColor(fns, palette) {
+  const used = new Set(fns.map(f => f.color));
+  for (const c of palette) if (!used.has(c)) return c;
+  return palette[fns.length % palette.length];
+}
+
+function humanizeError(msg) {
+  if (!msg) return 'Invalid expression';
+  if (msg.startsWith('Unknown: ')) return 'Unknown name "' + msg.slice(9) + '"';
+  if (msg.startsWith('Not a function: ')) return '"' + msg.slice(16) + '" is not callable';
+  if (msg.startsWith('Unexpected character: ')) return 'Unexpected character "' + msg.slice(22) + '"';
+  if (msg.includes('Unexpected token')) return 'Check syntax near an operator';
+  if (msg.includes('Trailing tokens')) return 'Extra characters at end';
+  if (msg.startsWith('Bad op: ')) return 'Unsupported operator';
+  return msg;
+}
+
+function evaluateSafe(fn, x) {
+  try {
+    const y = fn(x);
+    return Number.isFinite(y) ? y : NaN;
+  } catch {
+    return NaN;
+  }
+}
+
+function bisectRoot(fn, left, right, maxIter = 32) {
+  let a = left;
+  let b = right;
+  let fa = evaluateSafe(fn, a);
+  let fb = evaluateSafe(fn, b);
+  if (!Number.isFinite(fa) || !Number.isFinite(fb)) return null;
+  if (Math.abs(fa) < 1e-10) return a;
+  if (Math.abs(fb) < 1e-10) return b;
+  if (fa * fb > 0) return null;
+  for (let i = 0; i < maxIter; i++) {
+    const mid = (a + b) / 2;
+    const fm = evaluateSafe(fn, mid);
+    if (!Number.isFinite(fm)) return null;
+    if (Math.abs(fm) < 1e-10) return mid;
+    if (fa * fm <= 0) {
+      b = mid;
+      fb = fm;
+    } else {
+      a = mid;
+      fa = fm;
+    }
+  }
+  return (a + b) / 2;
+}
+
+function dedupePoints(points, xTol, yTol) {
+  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  const deduped = [];
+  sorted.forEach((point) => {
+    const last = deduped[deduped.length - 1];
+    if (last && Math.abs(last.x - point.x) <= xTol && Math.abs(last.y - point.y) <= yTol && last.type === point.type) return;
+    deduped.push(point);
+  });
+  return deduped;
+}
+
+function scanRoots(fn, xMin, xMax, sampleCount, yTol) {
+  const roots = [];
+  const pushRoot = (x) => {
+    if (!Number.isFinite(x)) return;
+    const y = evaluateSafe(fn, x);
+    if (!Number.isFinite(y) || Math.abs(y) > yTol * 3) return;
+    roots.push(x);
+  };
+  const step = (xMax - xMin) / sampleCount;
+  let prevX = xMin;
+  let prevY = evaluateSafe(fn, prevX);
+  if (Number.isFinite(prevY) && Math.abs(prevY) <= 1e-8) pushRoot(prevX);
+  for (let i = 1; i <= sampleCount; i++) {
+    const x = xMin + step * i;
+    const y = evaluateSafe(fn, x);
+    if (!Number.isFinite(prevY) || !Number.isFinite(y)) {
+      prevX = x;
+      prevY = y;
+      continue;
+    }
+    if (Math.abs(y) <= 1e-8) pushRoot(x);
+    if (prevY * y < 0) {
+      const root = bisectRoot(fn, prevX, x);
+      if (root != null) pushRoot(root);
+    }
+    prevX = x;
+    prevY = y;
+  }
+  return dedupePoints(roots.map(x => ({ x, y: 0, type: 'zero' })), step * 1.5, yTol * 2).map(p => p.x);
+}
+
+function scanExtrema(fn, xMin, xMax, sampleCount) {
+  const span = xMax - xMin;
+  if (!Number.isFinite(span) || span <= 0) return [];
+  const h = span / (sampleCount * 80);
+  const derivAt = (x) => {
+    const yp = evaluateSafe(fn, x + h);
+    const ym = evaluateSafe(fn, x - h);
+    if (!Number.isFinite(yp) || !Number.isFinite(ym)) return NaN;
+    return (yp - ym) / (2 * h);
+  };
+  const extrema = [];
+  const step = span / sampleCount;
+  let prevX = xMin;
+  let prevD = derivAt(prevX);
+  for (let i = 1; i <= sampleCount; i++) {
+    const x = xMin + step * i;
+    const d = derivAt(x);
+    if (Number.isFinite(prevD) && Number.isFinite(d) && prevD * d < 0 && Math.abs(prevD - d) < 1e8) {
+      let a = prevX, b = x, da = prevD;
+      for (let k = 0; k < 28; k++) {
+        const mid = (a + b) / 2;
+        const dm = derivAt(mid);
+        if (!Number.isFinite(dm)) break;
+        if (Math.abs(dm) < 1e-10) { a = b = mid; break; }
+        if (da * dm <= 0) { b = mid; } else { a = mid; da = dm; }
+      }
+      const root = (a + b) / 2;
+      const y = evaluateSafe(fn, root);
+      if (Number.isFinite(y)) {
+        extrema.push({ x: root, y, type: prevD > 0 ? 'max' : 'min' });
+      }
+    }
+    prevX = x; prevD = d;
+  }
+  return extrema;
+}
+
+function computeSpecialPoints(functions, xMin, xMax, yMin, yMax, scale, width) {
+  const visible = functions.filter(fn => fn.visible && fn.compiled);
+  if (!visible.length || !Number.isFinite(xMin) || !Number.isFinite(xMax)) return [];
+  const sampleCount = Math.max(320, Math.min(1600, Math.floor(width * 1.5)));
+  const yTol = Math.max(1e-6, 6 / scale);
+  const points = [];
+
+  visible.forEach((fn) => {
+    const zeros = scanRoots(fn.compiled, xMin, xMax, sampleCount, yTol);
+    zeros.forEach((x) => {
+      points.push({
+        type: 'zero', x, y: 0,
+        color: fn.color, fnId: fn.id, label: fn.label,
+      });
+    });
+    const extrema = scanExtrema(fn.compiled, xMin, xMax, Math.min(sampleCount, 900));
+    extrema.forEach(({ x, y, type }) => {
+      points.push({
+        type, x, y,
+        color: fn.color, fnId: fn.id, label: fn.label,
+      });
+    });
+  });
+
+  for (let i = 0; i < visible.length; i++) {
+    for (let j = i + 1; j < visible.length; j++) {
+      const leftFn = visible[i].compiled;
+      const rightFn = visible[j].compiled;
+      const diff = (x) => leftFn(x) - rightFn(x);
+      const roots = scanRoots(diff, xMin, xMax, sampleCount, yTol);
+      roots.forEach((x) => {
+        const y = evaluateSafe(leftFn, x);
+        if (!Number.isFinite(y)) return;
+        points.push({
+          type: 'intersection', x, y,
+          color: visible[i].color, color2: visible[j].color,
+          fnId: visible[i].id, fn2Id: visible[j].id,
+          label: visible[i].label, label2: visible[j].label,
+        });
+      });
+    }
+  }
+
+  return dedupePoints(
+    points.filter(point => point.y >= yMin - yTol * 4 && point.y <= yMax + yTol * 4),
+    (xMax - xMin) / sampleCount * 2,
+    yTol * 3,
+  );
+}
+
+function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
   const [mouse, setMouse] = useState(null);
   const draggingRef = useRef(null);
+  const [labelFade, setLabelFade] = useState(null);
+  const [revealedPointKey, setRevealedPointKey] = useState(null);
+  const revealTimerRef = useRef(null);
+  const prevCoordModeRef = useRef(coordMode);
 
   useEffect(() => {
     if (!wrapRef.current) return;
@@ -316,6 +629,121 @@ function PlotCanvas({ functions, view, setView, theme, onTrace }) {
     const { cx, cy, scale } = view;
     return [cx + (sx - size.w / 2) / scale, cy - (sy - size.h / 2) / scale];
   }, [view, size]);
+
+  useEffect(() => {
+    if (prevCoordModeRef.current === coordMode) return;
+    const from = prevCoordModeRef.current;
+    prevCoordModeRef.current = coordMode;
+    let raf = 0;
+    const duration = 220;
+    const started = performance.now();
+    const tick = (now) => {
+      const progress = Math.min(1, (now - started) / duration);
+      setLabelFade({ from, to: coordMode, progress });
+      if (progress < 1) raf = requestAnimationFrame(tick);
+      else setTimeout(() => setLabelFade(null), 0);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [coordMode]);
+
+  const worldBounds = useMemo(() => {
+    const [wxMin, wyMax] = screenToWorld(0, 0);
+    const [wxMax, wyMin] = screenToWorld(size.w, size.h);
+    return { wxMin, wxMax, wyMin, wyMax };
+  }, [screenToWorld, size]);
+
+  const specialPoints = useMemo(() => (
+    computeSpecialPoints(
+      functions,
+      worldBounds.wxMin,
+      worldBounds.wxMax,
+      worldBounds.wyMin,
+      worldBounds.wyMax,
+      view.scale,
+      size.w,
+    )
+  ), [functions, worldBounds, view.scale, size.w]);
+
+  const pointOverlay = useMemo(() => {
+    const screenPoints = specialPoints
+      .map((point) => {
+        const [sx, sy] = worldToScreen(point.x, point.y);
+        const distanceToMouse = mouse ? Math.hypot(sx - mouse.x, sy - mouse.y) : Infinity;
+        return { ...point, key: getPointKey(point), sx, sy, distanceToMouse };
+      })
+      .filter(point => point.sx >= -16 && point.sx <= size.w + 16 && point.sy >= -16 && point.sy <= size.h + 16);
+
+    const snappedPoint = mouse
+      ? screenPoints.reduce((closest, point) => (
+          point.distanceToMouse < (closest?.distanceToMouse ?? Infinity) ? point : closest
+        ), null)
+      : null;
+
+    return {
+      screenPoints,
+      snappedPoint: snappedPoint && snappedPoint.distanceToMouse <= 16 ? snappedPoint : null,
+    };
+  }, [mouse, size, specialPoints, worldToScreen]);
+
+  const curveTracker = useMemo(() => {
+    if (!mouse) return null;
+    const [wx] = screenToWorld(mouse.x, mouse.y);
+    let best = null;
+    functions.forEach((fn) => {
+      if (!fn.visible || !fn.compiled) return;
+      const y = evaluateSafe(fn.compiled, wx);
+      if (!Number.isFinite(y)) return;
+      const [, sy] = worldToScreen(wx, y);
+      const dist = Math.abs(sy - mouse.y);
+      if (!best || dist < best.dist) best = { fn, x: wx, y, sx: mouse.x, sy, dist };
+    });
+    return best && best.dist <= 26 ? best : null;
+  }, [mouse, functions, worldToScreen, screenToWorld]);
+
+  const visiblePoint = pointOverlay.snappedPoint && pointOverlay.snappedPoint.key === revealedPointKey
+    ? pointOverlay.snappedPoint
+    : null;
+
+  const showCurveTrace = !visiblePoint && !!curveTracker;
+
+  useEffect(() => {
+    window.clearTimeout(revealTimerRef.current);
+    if (!pointOverlay.snappedPoint) {
+      setRevealedPointKey(null);
+      return;
+    }
+    const nextKey = pointOverlay.snappedPoint.key;
+    setRevealedPointKey(null);
+    revealTimerRef.current = window.setTimeout(() => {
+      setRevealedPointKey(nextKey);
+    }, 150);
+    return () => window.clearTimeout(revealTimerRef.current);
+  }, [pointOverlay.snappedPoint?.key]);
+
+  useEffect(() => {
+    if (!onTrace) return;
+    if (visiblePoint) {
+      onTrace({
+        fn: { color: visiblePoint.type === 'intersection' ? theme.ink : visiblePoint.color, label: visiblePoint.label },
+        x: visiblePoint.x,
+        y: visiblePoint.y,
+        kind: visiblePoint.type,
+        label2: visiblePoint.label2,
+      });
+      return;
+    }
+    if (curveTracker) {
+      onTrace({
+        fn: { color: curveTracker.fn.color, label: curveTracker.fn.label },
+        x: curveTracker.x,
+        y: curveTracker.y,
+        kind: 'curve',
+      });
+      return;
+    }
+    onTrace(null);
+  }, [onTrace, theme.ink, visiblePoint, curveTracker]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -342,8 +770,7 @@ function PlotCanvas({ functions, view, setView, theme, onTrace }) {
     else step = 10 * pow;
     const minorStep = step / 5;
 
-    const [wxMin, wyMax] = screenToWorld(0, 0);
-    const [wxMax, wyMin] = screenToWorld(size.w, size.h);
+    const { wxMin, wxMax, wyMin, wyMax } = worldBounds;
 
     const drawGridLines = (st, color, width) => {
       ctx.strokeStyle = color; ctx.lineWidth = width;
@@ -401,6 +828,7 @@ function PlotCanvas({ functions, view, setView, theme, onTrace }) {
       ctx.fillText('0', ax0X - 4, ax0Y + 4);
     }
 
+    const labelAnchors = [];
     functions.forEach((fn) => {
       if (!fn.visible || !fn.compiled) return;
       ctx.strokeStyle = fn.color;
@@ -409,6 +837,7 @@ function PlotCanvas({ functions, view, setView, theme, onTrace }) {
       ctx.beginPath();
       const samples = size.w * 2;
       let prev = null;
+      let lastGood = null;
       for (let i = 0; i <= samples; i++) {
         const sx = (i / samples) * size.w;
         const [wx] = screenToWorld(sx, 0);
@@ -419,60 +848,205 @@ function PlotCanvas({ functions, view, setView, theme, onTrace }) {
         if (prev && Math.abs(sy - prev[1]) > size.h * 1.5) prev = null;
         if (prev == null) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
         prev = [sx, sy];
+        if (sy >= 0 && sy <= size.h) lastGood = [sx, sy];
       }
       ctx.stroke();
+      if (lastGood && fn.label) labelAnchors.push({ label: fn.label, color: fn.color, sx: lastGood[0], sy: lastGood[1] });
     });
 
-    if (mouse) {
-      const [wx] = screenToWorld(mouse.x, mouse.y);
-      let closest = null;
-      functions.forEach((fn) => {
-        if (!fn.visible || !fn.compiled) return;
-        try {
-          const wy = fn.compiled(wx);
-          if (!isFinite(wy)) return;
-          const [, sy] = worldToScreen(wx, wy);
-          const d = Math.abs(sy - mouse.y);
-          if (closest == null || d < closest.d) closest = { fn, wx, wy, sy, d };
-        } catch {}
-      });
-      if (closest && closest.d < 60) {
-        const [sxp] = worldToScreen(closest.wx, closest.wy);
-        ctx.strokeStyle = theme.ruleStrong; ctx.lineWidth = 1;
+    // Function labels near the right edge of each curve
+    if (labelAnchors.length) {
+      ctx.save();
+      ctx.font = '600 11px "JetBrains Mono", ui-monospace, monospace';
+      ctx.textBaseline = 'middle';
+      const placed = [];
+      labelAnchors
+        .sort((a, b) => b.sx - a.sx)
+        .forEach(({ label, color, sx, sy }) => {
+          let lx = Math.min(sx + 6, size.w - 4 - ctx.measureText(label).width);
+          let ly = Math.max(10, Math.min(size.h - 10, sy));
+          const minGap = 14;
+          let tries = 0;
+          while (placed.some(p => Math.abs(p.sx - lx) < 40 && Math.abs(p.sy - ly) < minGap) && tries++ < 12) {
+            ly += (tries % 2 ? -1 : 1) * minGap;
+            ly = Math.max(10, Math.min(size.h - 10, ly));
+          }
+          placed.push({ sx: lx, sy: ly });
+          ctx.fillStyle = theme.panel;
+          const w = ctx.measureText(label).width;
+          ctx.globalAlpha = 0.88;
+          ctx.fillRect(lx - 2, ly - 8, w + 4, 16);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = color;
+          ctx.textAlign = 'left';
+          ctx.fillText(label, lx, ly);
+        });
+      ctx.restore();
+    }
+
+    const { screenPoints, snappedPoint } = pointOverlay;
+    const activePoint = snappedPoint;
+
+    const labelPhases = labelFade
+      ? [
+          { mode: labelFade.from, alpha: 1 - labelFade.progress },
+          { mode: labelFade.to, alpha: labelFade.progress },
+        ]
+      : [{ mode: coordMode, alpha: 1 }];
+
+    screenPoints.forEach((point) => {
+      ctx.save();
+      const isActive = activePoint === point;
+      const radius = isActive ? 5.5 : 4;
+      if (point.type === 'intersection') {
+        // Bicolor split disc for intersections
+        ctx.lineWidth = 1.4;
+        ctx.strokeStyle = theme.panel;
+        ctx.beginPath();
+        ctx.arc(point.sx, point.sy, radius, -Math.PI / 2, Math.PI / 2);
+        ctx.fillStyle = point.color;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(point.sx, point.sy, radius, Math.PI / 2, -Math.PI / 2);
+        ctx.fillStyle = point.color2 || point.color;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(point.sx, point.sy, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = theme.ink;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      } else if (point.type === 'max' || point.type === 'min') {
+        // Diamond for extrema
+        ctx.fillStyle = point.color;
+        ctx.strokeStyle = theme.panel;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(point.sx, point.sy - radius);
+        ctx.lineTo(point.sx + radius, point.sy);
+        ctx.lineTo(point.sx, point.sy + radius);
+        ctx.lineTo(point.sx - radius, point.sy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        // Zero
+        ctx.fillStyle = point.color;
+        ctx.strokeStyle = theme.panel;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(point.sx, point.sy, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    });
+
+    const typeText = { zero: 'zero', max: 'max', min: 'min', intersection: '∩' };
+    const drawReadout = (point, { titleLines, color, showCrosshair }) => {
+      ctx.save();
+      if (showCrosshair) {
+        ctx.strokeStyle = theme.ruleStrong;
+        ctx.lineWidth = 1;
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
-        ctx.moveTo(sxp, 0); ctx.lineTo(sxp, size.h);
-        ctx.moveTo(0, closest.sy); ctx.lineTo(size.w, closest.sy);
+        ctx.moveTo(point.sx, 0); ctx.lineTo(point.sx, size.h);
+        ctx.moveTo(0, point.sy); ctx.lineTo(size.w, point.sy);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = closest.fn.color;
-        ctx.beginPath(); ctx.arc(sxp, closest.sy, 5, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = theme.panel; ctx.lineWidth = 2; ctx.stroke();
-        const label = `(${closest.wx.toFixed(3)}, ${closest.wy.toFixed(3)})`;
-        ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
-        const metrics = ctx.measureText(label);
-        const padX = 8;
-        let lx = sxp + 12; let ly = closest.sy - 28;
-        if (lx + metrics.width + padX * 2 > size.w) lx = sxp - metrics.width - padX * 2 - 12;
-        if (ly < 4) ly = closest.sy + 12;
-        ctx.fillStyle = theme.ink;
-        ctx.fillRect(lx, ly, metrics.width + padX * 2, 22);
-        ctx.fillStyle = theme.bg;
-        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        ctx.fillText(label, lx + padX, ly + 11);
-        if (onTrace) onTrace({ fn: closest.fn, x: closest.wx, y: closest.wy });
       } else {
-        if (onTrace) onTrace(null);
+        ctx.strokeStyle = theme.ruleStrong;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(point.sx, point.sy);
+        ctx.lineTo(point.sx, size.h);
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
+      ctx.restore();
+
+      ctx.save();
+      ctx.font = '600 10px "JetBrains Mono", ui-monospace, monospace';
+      const titleWidth = titleLines.reduce((w, line) => Math.max(w, ctx.measureText(line).width), 0);
+      ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
+      const coordLabels = labelPhases.map(({ mode, alpha }) => ({
+        text: formatPointLabel(point.x, point.y, mode),
+        alpha,
+      })).filter(label => label.alpha > 0.001);
+      const coordWidth = coordLabels.reduce((w, l) => Math.max(w, ctx.measureText(l.text).width), 0);
+      const contentW = Math.max(titleWidth, coordWidth);
+      const padX = 7;
+      const titleH = titleLines.length ? 14 : 0;
+      const boxH = titleH + 18;
+      let lx = point.sx + 10;
+      let ly = point.sy - boxH - 8;
+      if (lx + contentW + padX * 2 > size.w - 6) lx = point.sx - contentW - padX * 2 - 10;
+      if (ly < 6) ly = point.sy + 12;
+      if (ly + boxH > size.h - 6) ly = point.sy - boxH - 8;
+
+      ctx.fillStyle = theme.panel;
+      ctx.strokeStyle = theme.ruleStrong;
+      ctx.lineWidth = 1;
+      ctx.fillRect(lx, ly, contentW + padX * 2, boxH);
+      ctx.strokeRect(lx + 0.5, ly + 0.5, contentW + padX * 2 - 1, boxH - 1);
+
+      if (titleLines.length) {
+        ctx.font = '600 10px "JetBrains Mono", ui-monospace, monospace';
+        ctx.fillStyle = color || theme.muted;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(titleLines.join('  '), lx + padX, ly + 8);
+      }
+      coordLabels.forEach(({ text, alpha }) => {
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = theme.ink;
+        ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, lx + padX, ly + titleH + 9);
+        ctx.restore();
+      });
+      ctx.restore();
+    };
+
+    if (visiblePoint) {
+      const titleLines = [];
+      if (visiblePoint.type === 'intersection') {
+        titleLines.push(`${visiblePoint.label || ''} ∩ ${visiblePoint.label2 || ''}`.trim());
+      } else if (visiblePoint.type && typeText[visiblePoint.type]) {
+        titleLines.push(`${visiblePoint.label || ''} · ${typeText[visiblePoint.type]}`.trim());
+      }
+      drawReadout(visiblePoint, { titleLines, color: visiblePoint.color, showCrosshair: true });
+    } else if (showCurveTrace) {
+      const tracker = curveTracker;
+      ctx.save();
+      ctx.fillStyle = tracker.fn.color;
+      ctx.strokeStyle = theme.panel;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(tracker.sx, tracker.sy, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+      drawReadout(
+        { sx: tracker.sx, sy: tracker.sy, x: tracker.x, y: tracker.y },
+        { titleLines: tracker.fn.label ? [tracker.fn.label] : [], color: tracker.fn.color, showCrosshair: false },
+      );
     }
-  }, [functions, view, size, theme, mouse, worldToScreen, screenToWorld, onTrace]);
+  }, [coordMode, labelFade, pointOverlay, size, theme, view, visiblePoint, curveTracker, showCurveTrace, worldBounds, worldToScreen, screenToWorld, functions]);
 
   useEffect(() => { draw(); }, [draw]);
 
-  const onMouseDown = (e) => { draggingRef.current = { x: e.clientX, y: e.clientY, view: { ...view } }; };
+  const pinchRef = useRef(null);
+
+  const onMouseDown = (e) => {
+    draggingRef.current = { x: e.clientX, y: e.clientY, view: { ...view } };
+    setMouse(null);
+  };
   const onMouseMove = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
-    setMouse({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    const nextMouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     if (draggingRef.current) {
       const dx = e.clientX - draggingRef.current.x;
       const dy = e.clientY - draggingRef.current.y;
@@ -481,10 +1055,13 @@ function PlotCanvas({ functions, view, setView, theme, onTrace }) {
         cx: draggingRef.current.view.cx - dx / view.scale,
         cy: draggingRef.current.view.cy + dy / view.scale,
       });
+      setMouse(null);
+      return;
     }
+    setMouse(nextMouse);
   };
   const onMouseUp = () => { draggingRef.current = null; };
-  const onMouseLeave = () => { draggingRef.current = null; setMouse(null); if (onTrace) onTrace(null); };
+  const onMouseLeave = () => { draggingRef.current = null; setMouse(null); };
   const onWheel = (e) => {
     e.preventDefault();
     const rect = canvasRef.current.getBoundingClientRect();
@@ -492,10 +1069,63 @@ function PlotCanvas({ functions, view, setView, theme, onTrace }) {
     const my = e.clientY - rect.top;
     const [wxBefore, wyBefore] = screenToWorld(mx, my);
     const factor = Math.exp(-e.deltaY * 0.0015);
-    const newScale = Math.max(0.5, Math.min(4000, view.scale * factor));
+    const newScale = Math.max(0.5, Math.min(8000, view.scale * factor));
     const newCx = wxBefore - (mx - size.w / 2) / newScale;
     const newCy = wyBefore + (my - size.h / 2) / newScale;
     setView({ cx: newCx, cy: newCy, scale: newScale });
+  };
+
+  const onTouchStart = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      draggingRef.current = { x: t.clientX, y: t.clientY, view: { ...view } };
+      pinchRef.current = null;
+      setMouse({ x: t.clientX - rect.left, y: t.clientY - rect.top });
+    } else if (e.touches.length === 2) {
+      draggingRef.current = null;
+      const [t1, t2] = e.touches;
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      pinchRef.current = {
+        dist, scale: view.scale, cx: view.cx, cy: view.cy,
+        midX: (t1.clientX + t2.clientX) / 2 - rect.left,
+        midY: (t1.clientY + t2.clientY) / 2 - rect.top,
+      };
+      setMouse(null);
+    }
+  };
+  const onTouchMove = (e) => {
+    e.preventDefault();
+    const rect = canvasRef.current.getBoundingClientRect();
+    if (e.touches.length === 1 && draggingRef.current) {
+      const t = e.touches[0];
+      const dx = t.clientX - draggingRef.current.x;
+      const dy = t.clientY - draggingRef.current.y;
+      setView({
+        ...draggingRef.current.view,
+        cx: draggingRef.current.view.cx - dx / view.scale,
+        cy: draggingRef.current.view.cy + dy / view.scale,
+      });
+      setMouse({ x: t.clientX - rect.left, y: t.clientY - rect.top });
+    } else if (e.touches.length === 2 && pinchRef.current) {
+      const [t1, t2] = e.touches;
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const factor = dist / pinchRef.current.dist;
+      const newScale = Math.max(0.5, Math.min(8000, pinchRef.current.scale * factor));
+      const mx = pinchRef.current.midX, my = pinchRef.current.midY;
+      const wxBefore = pinchRef.current.cx + (mx - size.w / 2) / pinchRef.current.scale;
+      const wyBefore = pinchRef.current.cy - (my - size.h / 2) / pinchRef.current.scale;
+      const newCx = wxBefore - (mx - size.w / 2) / newScale;
+      const newCy = wyBefore + (my - size.h / 2) / newScale;
+      setView({ cx: newCx, cy: newCy, scale: newScale });
+    }
+  };
+  const onTouchEnd = (e) => {
+    if (e.touches.length === 0) {
+      draggingRef.current = null;
+      pinchRef.current = null;
+      setMouse(null);
+    }
   };
 
   return (
@@ -505,22 +1135,29 @@ function PlotCanvas({ functions, view, setView, theme, onTrace }) {
         onMouseDown={onMouseDown} onMouseMove={onMouseMove}
         onMouseUp={onMouseUp} onMouseLeave={onMouseLeave}
         onWheel={onWheel}
+        onTouchStart={onTouchStart} onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}
         style={{ display: 'block', cursor: draggingRef.current ? 'grabbing' : 'crosshair' }}
+        aria-label="Function plot canvas"
       />
     </div>
   );
 }
 
-function FunctionRow({ fn, index, theme, onChange, onDelete, isOnly }) {
-  const [editing, setEditing] = useState(false);
+function FunctionRow({ fn, theme, onChange, onDelete, isOnly }) {
+  const [editing, setEditing] = useState(!fn.expr);
   const [draft, setDraft] = useState(fn.expr);
   const inputRef = useRef(null);
   useEffect(() => { setDraft(fn.expr); }, [fn.expr]);
-  useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
   const commit = () => { onChange({ ...fn, expr: draft }); setEditing(false); };
   const hasError = !!fn.error;
-  const label = ['f', 'g', 'h', 'p', 'q', 'r'][index % 6];
-  const sub = '₁₂₃₄₅₆₇₈₉'[Math.floor(index / 6)] || '';
+  const label = fn.label || 'f';
 
   return (
     <div style={{
@@ -531,6 +1168,7 @@ function FunctionRow({ fn, index, theme, onChange, onDelete, isOnly }) {
       <button
         onClick={() => onChange({ ...fn, visible: !fn.visible })}
         title={fn.visible ? 'Hide' : 'Show'}
+        aria-label={fn.visible ? `Hide ${label}` : `Show ${label}`}
         style={{
           width: 36, border: 'none', cursor: 'pointer', background: 'transparent',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -551,7 +1189,7 @@ function FunctionRow({ fn, index, theme, onChange, onDelete, isOnly }) {
           color: theme.muted, letterSpacing: '0.02em',
           opacity: fn.visible ? 1 : 0.45,
         }}>
-          {label}{sub}(x) =
+          {label}(x) =
         </div>
         {editing ? (
           <input
@@ -562,6 +1200,8 @@ function FunctionRow({ fn, index, theme, onChange, onDelete, isOnly }) {
               if (e.key === 'Enter') commit();
               if (e.key === 'Escape') { setDraft(fn.expr); setEditing(false); }
             }}
+            placeholder="e.g. sin(x) * x"
+            aria-label={`Expression for ${label}`}
             style={{
               width: '100%', border: 'none', outline: 'none', background: 'transparent',
               fontFamily: '"JetBrains Mono", monospace', fontSize: 14, color: theme.ink,
@@ -577,9 +1217,11 @@ function FunctionRow({ fn, index, theme, onChange, onDelete, isOnly }) {
               color: hasError ? '#c94a3a' : theme.ink,
               cursor: 'text', padding: '2px 0', marginTop: 2,
               opacity: fn.visible ? 1 : 0.45, wordBreak: 'break-word',
+              textDecoration: hasError ? 'underline wavy #c94a3a' : 'none',
+              textUnderlineOffset: 3,
             }}
           >
-            {fn.expr || <span style={{ color: theme.muted }}>tap to enter…</span>}
+            {fn.expr || <span style={{ color: theme.muted }}>click to enter an expression…</span>}
           </div>
         )}
         {hasError && (
@@ -591,7 +1233,7 @@ function FunctionRow({ fn, index, theme, onChange, onDelete, isOnly }) {
 
       {!isOnly && (
         <button
-          onClick={onDelete} title="Remove"
+          onClick={onDelete} title="Remove" aria-label={`Remove ${label}`}
           style={{
             width: 32, border: 'none', background: 'transparent',
             color: theme.muted, cursor: 'pointer',
@@ -626,13 +1268,17 @@ function SidebarButton({ children, onClick, theme }) {
   );
 }
 
-function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, traceInfo, onExport, onCollapse, width, themeKey, pickTheme }) {
+function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, traceInfo, onExport, onCollapse, width, themeKey, pickTheme, coordMode, onFitView }) {
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const themeMenuRef = useRef(null);
   const addFn = () => {
     const palette = theme.funcPalette;
-    const color = palette[functions.length % palette.length];
+    const color = nextFreeColor(functions, palette);
+    const labelSeq = nextFreeSeq(functions);
     setFunctions([...functions, {
       id: Math.random().toString(36).slice(2, 9),
       expr: '', visible: true, color, thickness: 2,
+      labelSeq, label: formatFnLabel(labelSeq),
     }]);
   };
   const updateFn = (idx, next) => {
@@ -640,6 +1286,22 @@ function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, t
   };
   const deleteFn = (idx) => setFunctions(functions.filter((_, i) => i !== idx));
   const resetView = () => setView({ cx: 0, cy: 0, scale: 50 });
+
+  useEffect(() => {
+    if (!themeMenuOpen) return;
+    const onPointerDown = (e) => {
+      if (themeMenuRef.current && !themeMenuRef.current.contains(e.target)) setThemeMenuOpen(false);
+    };
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') setThemeMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [themeMenuOpen]);
 
   return (
     <div style={{
@@ -663,6 +1325,73 @@ function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, t
             fontSize: 10, color: theme.muted, marginTop: 3,
             letterSpacing: '0.08em', textTransform: 'uppercase',
           }}>function plotter</div>
+        </div>
+        <div ref={themeMenuRef} style={{ position: 'relative' }}>
+          <button
+            onClick={() => setThemeMenuOpen(v => !v)}
+            title="Theme"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '0 8px', height: 28,
+              border: `1px solid ${theme.rule}`,
+              background: themeMenuOpen ? theme.chip : 'transparent',
+              borderRadius: 4, cursor: 'pointer',
+              color: theme.ink, fontFamily: '"JetBrains Mono", monospace',
+              fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase',
+            }}
+          >
+            <span style={{ width: 8, height: 8, borderRadius: 8, background: theme.accent }}/>
+            {window.LOCUS_THEMES[themeKey].name}
+          </button>
+          {themeMenuOpen && (
+            <div className="popover-grow" style={{
+              position: 'absolute', top: 'calc(100% + 8px)', right: 0,
+              width: 196, padding: 10,
+              background: theme.panel, border: `1px solid ${theme.rule}`,
+              borderRadius: 6, boxShadow: '0 12px 28px rgba(0,0,0,0.18)',
+              zIndex: 20,
+            }}>
+              <div style={{
+                fontFamily: '"JetBrains Mono", monospace',
+                fontSize: 10, color: theme.muted,
+                letterSpacing: '0.1em', textTransform: 'uppercase',
+                marginBottom: 8,
+              }}>Theme</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                {Object.entries(window.LOCUS_THEMES).map(([key, t]) => {
+                  const active = themeKey === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => {
+                        pickTheme(key);
+                        setThemeMenuOpen(false);
+                      }}
+                      title={t.name}
+                      style={{
+                        aspectRatio: '1',
+                        border: active ? `2px solid ${theme.ink}` : `1px solid ${theme.rule}`,
+                        borderRadius: 4, cursor: 'pointer', padding: 3,
+                        background: t.bg, position: 'relative',
+                        transition: 'border-color 150ms, transform 120ms',
+                      }}
+                      onMouseEnter={e => { if (!active) e.currentTarget.style.borderColor = theme.ruleStrong; }}
+                      onMouseLeave={e => { if (!active) e.currentTarget.style.borderColor = theme.rule; }}
+                    >
+                      <div style={{
+                        position: 'absolute', inset: 4,
+                        display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2,
+                      }}>
+                        {t.funcPalette.slice(0, 3).map((c, i) => (
+                          <div key={i} style={{ background: c, borderRadius: 1 }}/>
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
         <button
           onClick={onCollapse}
@@ -706,7 +1435,7 @@ function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, t
         {functions.map((fn, i) => (
           <FunctionRow
             key={fn.id}
-            fn={fn} index={i} theme={theme}
+            fn={fn} theme={theme}
             onChange={(next) => updateFn(i, next)}
             onDelete={() => deleteFn(i)}
             isOnly={functions.length === 1}
@@ -717,6 +1446,18 @@ function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, t
             No functions yet. Add one to get started.
           </div>
         )}
+        <div style={{
+          padding: '12px 16px 16px 16px',
+          fontFamily: '"JetBrains Mono", monospace', fontSize: 10,
+          color: theme.muted, lineHeight: 1.6,
+          borderTop: `1px dashed ${theme.rule}`,
+          marginTop: 8,
+        }}>
+          <div style={{ letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Reference</div>
+          <div>sin · cos · tan · asin · acos · atan</div>
+          <div>exp · ln · log · sqrt · abs · pow</div>
+          <div>pi · e · tau · sec · csc · cot</div>
+        </div>
       </div>
 
       <div style={{ borderTop: `1px solid ${theme.rule}` }}>
@@ -727,70 +1468,34 @@ function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, t
           minHeight: 38, display: 'flex', alignItems: 'center',
         }}>
           {traceInfo ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span style={{ width: 8, height: 8, borderRadius: 8, background: traceInfo.fn.color }}/>
+              {traceInfo.fn.label && (
+                <span style={{ color: theme.ink, fontWeight: 600 }}>
+                  {traceInfo.kind === 'intersection'
+                    ? `${traceInfo.fn.label} ∩ ${traceInfo.label2 || ''}`
+                    : traceInfo.kind && traceInfo.kind !== 'curve'
+                      ? `${traceInfo.fn.label} · ${traceInfo.kind}`
+                      : traceInfo.fn.label}
+                </span>
+              )}
               <span style={{ color: theme.muted }}>x</span>
-              <span style={{ color: theme.ink }}>{traceInfo.x.toFixed(4)}</span>
+              <span style={{ color: theme.ink }}>{formatCoordinateValue(traceInfo.x, coordMode)}</span>
               <span style={{ color: theme.muted, marginLeft: 6 }}>y</span>
-              <span style={{ color: theme.ink }}>{traceInfo.y.toFixed(4)}</span>
+              <span style={{ color: theme.ink }}>{formatCoordinateValue(traceInfo.y, coordMode)}</span>
             </div>
           ) : (
             <div style={{ color: theme.muted, fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-              hover canvas to trace
+              hover any curve to trace
             </div>
           )}
         </div>
 
-        <div style={{ padding: '12px 16px 6px 16px' }}>
-          <div style={{
-            fontFamily: '"JetBrains Mono", monospace',
-            fontSize: 10, color: theme.muted,
-            letterSpacing: '0.1em', textTransform: 'uppercase',
-            marginBottom: 8,
-          }}>Theme</div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {Object.entries(window.LOCUS_THEMES).map(([key, t]) => {
-              const active = themeKey === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => pickTheme(key)}
-                  title={t.name}
-                  style={{
-                    flex: 1, aspectRatio: '1',
-                    border: active ? `2px solid ${theme.ink}` : `1px solid ${theme.rule}`,
-                    borderRadius: 4, cursor: 'pointer', padding: 3,
-                    background: t.bg, position: 'relative',
-                    transition: 'border-color 150ms, transform 120ms',
-                  }}
-                  onMouseEnter={e => { if (!active) e.currentTarget.style.borderColor = theme.ruleStrong; }}
-                  onMouseLeave={e => { if (!active) e.currentTarget.style.borderColor = theme.rule; }}
-                >
-                  <div style={{
-                    position: 'absolute', inset: 4,
-                    display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2,
-                  }}>
-                    {t.funcPalette.slice(0, 3).map((c, i) => (
-                      <div key={i} style={{ background: c, borderRadius: 1 }}/>
-                    ))}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          <div style={{
-            marginTop: 6,
-            fontFamily: 'Inter, sans-serif', fontSize: 10.5,
-            color: theme.muted, textAlign: 'center',
-          }}>
-            {window.LOCUS_THEMES[themeKey].name}
-          </div>
-        </div>
-
-        <div style={{ padding: '6px 16px 12px 16px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <SidebarButton theme={theme} onClick={() => setView({ ...view, scale: view.scale * 1.4 })}>Zoom +</SidebarButton>
-          <SidebarButton theme={theme} onClick={() => setView({ ...view, scale: view.scale / 1.4 })}>Zoom −</SidebarButton>
-          <SidebarButton theme={theme} onClick={resetView}>Reset view</SidebarButton>
+        <div style={{ padding: '10px 16px 12px 16px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <SidebarButton theme={theme} onClick={() => setView({ ...view, scale: Math.min(8000, view.scale * 1.4) })}>Zoom +</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => setView({ ...view, scale: Math.max(0.5, view.scale / 1.4) })}>Zoom −</SidebarButton>
+          <SidebarButton theme={theme} onClick={onFitView}>Fit data</SidebarButton>
+          <SidebarButton theme={theme} onClick={resetView}>Reset</SidebarButton>
           <SidebarButton theme={theme} onClick={onExport}>Export PNG</SidebarButton>
         </div>
       </div>
@@ -798,7 +1503,7 @@ function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, t
   );
 }
 
-function CollapsedRailInner({ functions, theme, onExpand }) {
+function CollapsedRailInner({ functions, theme, onExpand, onToggleVisibility }) {
   return (
     <div style={{
       width: RAIL_WIDTH, height: '100%',
@@ -809,6 +1514,7 @@ function CollapsedRailInner({ functions, theme, onExpand }) {
       <button
         onClick={onExpand}
         title="Expand sidebar"
+        aria-label="Expand sidebar"
         style={{
           width: 32, height: 32, border: `1px solid ${theme.rule}`,
           background: 'transparent', borderRadius: 4, cursor: 'pointer',
@@ -827,16 +1533,25 @@ function CollapsedRailInner({ functions, theme, onExpand }) {
         paddingTop: 12,
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
       }}>
-        {functions.map((fn, i) => (
-          <div
+        {functions.map((fn) => (
+          <button
             key={fn.id}
-            title={`${['f','g','h','p','q','r'][i%6]}(x) = ${fn.expr}`}
+            onClick={() => onToggleVisibility(fn.id)}
+            title={`${fn.label || 'f'}(x) = ${fn.expr || '—'}  ·  click to ${fn.visible ? 'hide' : 'show'}`}
+            aria-label={`${fn.visible ? 'Hide' : 'Show'} ${fn.label || 'function'}`}
             style={{
+              width: 18, height: 18, padding: 0,
+              border: 'none', background: 'transparent', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <span style={{
               width: 12, height: 12, borderRadius: 12,
               background: fn.visible ? fn.color : 'transparent',
               border: fn.visible ? 'none' : `1.5px dashed ${theme.ruleStrong}`,
-            }}
-          />
+              transition: 'background 120ms',
+            }}/>
+          </button>
         ))}
       </div>
       <div style={{
@@ -883,6 +1598,7 @@ function SidebarShell(props) {
           functions={props.functions}
           theme={theme}
           onExpand={props.onExpand}
+          onToggleVisibility={props.onToggleVisibility}
         />
       </div>
       {/* Resize handle — only when expanded */}
@@ -921,13 +1637,31 @@ function App() {
     return TWEAK_DEFAULTS.theme;
   });
   const theme = window.LOCUS_THEMES[themeKey] || window.LOCUS_THEMES.linen;
+  const [coordMode, setCoordMode] = useState(() => {
+    try {
+      const stored = localStorage.getItem('locus:coordMode');
+      if (stored === COORD_MODES.exact || stored === COORD_MODES.decimal) return stored;
+    } catch {}
+    return COORD_MODES.exact;
+  });
 
   const [functions, setFunctions] = useState(() => {
     try {
       const s = localStorage.getItem('locus:functions');
       if (s) {
         const parsed = JSON.parse(s);
-        if (Array.isArray(parsed) && parsed.length) return parsed;
+        if (Array.isArray(parsed) && parsed.length) {
+          // Back-fill stable labels for items saved before labelSeq existed.
+          const used = new Set(parsed.map(f => f.labelSeq).filter(n => Number.isFinite(n)));
+          let next = 0;
+          return parsed.map((f) => {
+            if (Number.isFinite(f.labelSeq)) return { ...f, label: formatFnLabel(f.labelSeq) };
+            while (used.has(next)) next++;
+            const seq = next++;
+            used.add(seq);
+            return { ...f, labelSeq: seq, label: formatFnLabel(seq) };
+          });
+        }
       }
     } catch {}
     const palette = window.LOCUS_THEMES[TWEAK_DEFAULTS.theme].funcPalette;
@@ -935,6 +1669,7 @@ function App() {
       id: Math.random().toString(36).slice(2, 9),
       expr: f.expr, visible: true,
       color: palette[i % palette.length], thickness: 2,
+      labelSeq: i, label: formatFnLabel(i),
     }));
   });
 
@@ -948,6 +1683,8 @@ function App() {
 
   const [traceInfo, setTraceInfo] = useState(null);
   const [showTweaks, setShowTweaks] = useState(false);
+  const [tweaksOpen, setTweaksOpen] = useState(false);
+  const tweaksRef = useRef(null);
 
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
@@ -962,6 +1699,7 @@ function App() {
   const [resizing, setResizing] = useState(false);
 
   useEffect(() => { try { localStorage.setItem('locus:theme', themeKey); } catch {} }, [themeKey]);
+  useEffect(() => { try { localStorage.setItem('locus:coordMode', coordMode); } catch {} }, [coordMode]);
   useEffect(() => { try { localStorage.setItem('locus:functions', JSON.stringify(functions)); } catch {} }, [functions]);
   useEffect(() => { try { localStorage.setItem('locus:view', JSON.stringify(view)); } catch {} }, [view]);
   useEffect(() => { try { localStorage.setItem('locus:sidebarWidth', String(sidebarWidth)); } catch {} }, [sidebarWidth]);
@@ -989,13 +1727,15 @@ function App() {
 
   const compiledFunctions = useMemo(() => {
     return functions.map(f => {
-      if (!f.expr || !f.expr.trim()) return { ...f, compiled: null, error: null };
+      const label = f.label || formatFnLabel(f.labelSeq);
+      if (!f.expr || !f.expr.trim()) return { ...f, label, compiled: null, error: null };
       try {
         const compiled = window.LocusMath.compile(f.expr);
-        compiled(0);
-        return { ...f, compiled, error: null };
+        const probe = compiled(0);
+        // Allow NaN at x=0 (e.g. 1/x) — only surface actual thrown errors.
+        return { ...f, label, compiled, error: null };
       } catch (err) {
-        return { ...f, compiled: null, error: err.message || 'Invalid expression' };
+        return { ...f, label, compiled: null, error: humanizeError(err.message) };
       }
     });
   }, [functions]);
@@ -1003,22 +1743,46 @@ function App() {
   const prevThemeRef = useRef(themeKey);
   useEffect(() => {
     if (prevThemeRef.current === themeKey) return;
+    const oldTheme = window.LOCUS_THEMES[prevThemeRef.current] || theme;
     prevThemeRef.current = themeKey;
-    setFunctions(prev => prev.map((f, i) => ({
-      ...f, color: theme.funcPalette[i % theme.funcPalette.length],
-    })));
+    setFunctions(prev => prev.map((f) => {
+      const idx = oldTheme.funcPalette.indexOf(f.color);
+      // If the color wasn't from the previous theme's palette (user customized),
+      // leave it alone. Otherwise remap to the same slot in the new palette.
+      if (idx < 0) return f;
+      return { ...f, color: theme.funcPalette[idx % theme.funcPalette.length] };
+    }));
   }, [themeKey, theme]);
 
   useEffect(() => {
     const onMsg = (e) => {
       if (!e.data) return;
       if (e.data.type === '__activate_edit_mode') setShowTweaks(true);
-      if (e.data.type === '__deactivate_edit_mode') setShowTweaks(false);
+      if (e.data.type === '__deactivate_edit_mode') {
+        setShowTweaks(false);
+        setTweaksOpen(false);
+      }
     };
     window.addEventListener('message', onMsg);
     window.parent.postMessage({ type: '__edit_mode_available' }, '*');
     return () => window.removeEventListener('message', onMsg);
   }, []);
+
+  useEffect(() => {
+    if (!showTweaks || !tweaksOpen) return;
+    const onPointerDown = (e) => {
+      if (tweaksRef.current && !tweaksRef.current.contains(e.target)) setTweaksOpen(false);
+    };
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') setTweaksOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [showTweaks, tweaksOpen]);
 
   const pickTheme = (key) => {
     setThemeKey(key);
@@ -1038,8 +1802,71 @@ function App() {
     const arr = typeof next === 'function' ? next(compiledFunctions) : next;
     setFunctions(arr.map(f => ({
       id: f.id, expr: f.expr, visible: f.visible, color: f.color, thickness: f.thickness,
+      labelSeq: f.labelSeq, label: f.label,
     })));
   };
+
+  const toggleVisibility = useCallback((id) => {
+    setFunctions(prev => prev.map(f => f.id === id ? { ...f, visible: !f.visible } : f));
+  }, []);
+
+  const fitView = useCallback(() => {
+    const visibleFns = compiledFunctions.filter(f => f.visible && f.compiled);
+    if (!visibleFns.length) { setView({ cx: 0, cy: 0, scale: 50 }); return; }
+    const canvasW = Math.max(360, window.innerWidth - (collapsed ? RAIL_WIDTH : sidebarWidth));
+    const canvasH = Math.max(300, window.innerHeight);
+    const xMin = -10, xMax = 10;
+    let yMin = Infinity, yMax = -Infinity;
+    visibleFns.forEach(fn => {
+      for (let i = 0; i <= 600; i++) {
+        const x = xMin + (xMax - xMin) * (i / 600);
+        try {
+          const y = fn.compiled(x);
+          if (!Number.isFinite(y)) continue;
+          if (Math.abs(y) > 1e8) continue;
+          if (y < yMin) yMin = y;
+          if (y > yMax) yMax = y;
+        } catch {}
+      }
+    });
+    if (!Number.isFinite(yMin) || !Number.isFinite(yMax) || yMin === yMax) {
+      setView({ cx: 0, cy: 0, scale: 50 });
+      return;
+    }
+    const pad = 1.15;
+    const cx = 0;
+    const cy = (yMin + yMax) / 2;
+    const xRange = (xMax - xMin) * pad;
+    const yRange = (yMax - yMin) * pad;
+    const scale = Math.max(1, Math.min(4000, Math.min(canvasW / xRange, canvasH / yRange)));
+    setView({ cx, cy, scale });
+  }, [compiledFunctions, collapsed, sidebarWidth]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = e.target && e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault();
+        setView(v => ({ ...v, scale: Math.min(8000, v.scale * 1.4) }));
+      } else if (e.key === '-' || e.key === '_') {
+        e.preventDefault();
+        setView(v => ({ ...v, scale: Math.max(0.5, v.scale / 1.4) }));
+      } else if (e.key === '0' || e.key === 'H' || e.key === 'h') {
+        e.preventDefault();
+        setView({ cx: 0, cy: 0, scale: 50 });
+      } else if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        fitView();
+      } else if (e.key === 'e' || e.key === 'E') {
+        e.preventDefault();
+        exportPNG();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fitView]);
 
   return (
     <div style={{ display: 'flex', width: '100%', height: '100%', background: theme.bg }}>
@@ -1052,7 +1879,10 @@ function App() {
         view={view}
         setView={setView}
         traceInfo={traceInfo}
+        coordMode={coordMode}
         onExport={exportPNG}
+        onFitView={fitView}
+        onToggleVisibility={toggleVisibility}
         collapsed={collapsed}
         expandedWidth={sidebarWidth}
         onCollapse={() => setCollapsed(true)}
@@ -1065,70 +1895,102 @@ function App() {
         <PlotCanvas
           functions={compiledFunctions}
           view={view} setView={setView}
-          theme={theme} onTrace={setTraceInfo}
+          theme={theme} onTrace={setTraceInfo} coordMode={coordMode}
         />
-        <div style={{
-          position: 'absolute', top: 16, right: 16,
-          padding: '6px 10px',
-          background: theme.panel, border: `1px solid ${theme.rule}`,
-          borderRadius: 4,
-          fontFamily: '"JetBrains Mono", monospace',
-          fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase',
-          color: theme.muted,
-          display: 'flex', alignItems: 'center', gap: 8,
-        }}>
-          <span style={{ width: 8, height: 8, borderRadius: 8, background: theme.accent }}/>
-          {theme.name}
+        <div style={{ position: 'absolute', top: 16, right: 16 }}>
+          <div className="coord-mode-switch" style={{ color: theme.muted, background: theme.panel, borderColor: theme.rule }}>
+            <button
+              className={coordMode === COORD_MODES.exact ? 'active' : ''}
+              onClick={() => setCoordMode(COORD_MODES.exact)}
+              title="Show coordinates as exact fractions of π, e where possible"
+              aria-label="Exact coordinates"
+              style={{ color: coordMode === COORD_MODES.exact ? theme.ink : theme.muted, background: coordMode === COORD_MODES.exact ? theme.chip : 'transparent' }}
+            >Exact</button>
+            <button
+              className={coordMode === COORD_MODES.decimal ? 'active' : ''}
+              onClick={() => setCoordMode(COORD_MODES.decimal)}
+              title="Show coordinates as decimals"
+              aria-label="Decimal coordinates"
+              style={{ color: coordMode === COORD_MODES.decimal ? theme.ink : theme.muted, background: coordMode === COORD_MODES.decimal ? theme.chip : 'transparent' }}
+            >Decimal</button>
+          </div>
         </div>
         <div style={{
           position: 'absolute', bottom: 14, left: 14,
           fontFamily: '"JetBrains Mono", monospace',
           fontSize: 10, color: theme.muted,
           letterSpacing: '0.06em', userSelect: 'none',
-          display: 'flex', gap: 14,
+          display: 'flex', gap: 14, flexWrap: 'wrap',
         }}>
           <span>drag · pan</span>
           <span>scroll · zoom</span>
           <span>hover · trace</span>
+          <span>+ − 0 F · keys</span>
         </div>
       </main>
 
       {showTweaks && (
-        <div className="tweaks-panel" style={{ color: '#111' }}>
-          <h3>Tweaks</h3>
-          <div style={{ fontSize: 11, color: '#666', marginBottom: 8 }}>Color theme</div>
-          <div className="theme-grid">
-            {Object.entries(window.LOCUS_THEMES).map(([key, t]) => (
-              <div key={key}>
-                <div
-                  className="theme-swatch"
-                  onClick={() => pickTheme(key)}
-                  title={t.name}
-                  style={{
-                    background: t.bg,
-                    border: themeKey === key ? `2px solid #111` : `2px solid rgba(0,0,0,0.08)`,
-                  }}
-                >
-                  <div style={{
-                    position: 'absolute', inset: 4,
-                    display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2,
-                  }}>
-                    {t.funcPalette.slice(0, 3).map((c, i) => (
-                      <div key={i} style={{ background: c, borderRadius: 2 }}/>
-                    ))}
+        <div ref={tweaksRef} style={{ position: 'absolute', top: 16, right: 16, zIndex: 1000 }}>
+          <button
+            onClick={() => setTweaksOpen(v => !v)}
+            style={{
+              marginTop: 36,
+              marginLeft: 'auto',
+              padding: '6px 10px',
+              background: tweaksOpen ? '#fff' : 'rgba(255,255,255,0.96)',
+              border: '1px solid rgba(0,0,0,0.1)',
+              borderRadius: 6,
+              boxShadow: tweaksOpen ? '0 8px 24px rgba(0,0,0,0.14)' : '0 4px 16px rgba(0,0,0,0.1)',
+              fontFamily: '"JetBrains Mono", monospace',
+              fontSize: 10,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: '#555',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}
+            aria-expanded={tweaksOpen}
+            aria-label="Toggle theme picker"
+          >
+            <span style={{ width: 8, height: 8, borderRadius: 8, background: theme.accent }}/>
+            Theme
+          </button>
+
+          {tweaksOpen && (
+            <div className="tweaks-panel popover-grow" style={{ color: '#111' }}>
+              <h3>Theme</h3>
+              <div className="theme-grid">
+                {Object.entries(window.LOCUS_THEMES).map(([key, t]) => (
+                  <div key={key}>
+                    <div
+                      className="theme-swatch"
+                      onClick={() => {
+                        pickTheme(key);
+                        setTweaksOpen(false);
+                      }}
+                      title={t.name}
+                      style={{
+                        background: t.bg,
+                        border: themeKey === key ? '2px solid #111' : '2px solid rgba(0,0,0,0.08)',
+                      }}
+                    >
+                      <div style={{
+                        position: 'absolute', inset: 4,
+                        display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2,
+                      }}>
+                        {t.funcPalette.slice(0, 3).map((c, i) => (
+                          <div key={i} style={{ background: c, borderRadius: 2 }}/>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="theme-swatch-label">{t.name}</div>
                   </div>
-                </div>
-                <div className="theme-swatch-label">{t.name}</div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div style={{
-            marginTop: 12, paddingTop: 10,
-            borderTop: '1px solid rgba(0,0,0,0.08)',
-            fontSize: 10, color: '#888', lineHeight: 1.5,
-          }}>
-            Each theme ships a harmonized function palette (shared chroma & lightness, varied hue).
-          </div>
+            </div>
+          )}
         </div>
       )}
     </div>
