@@ -127,6 +127,15 @@
     border-radius: 4px;
   }
   canvas { touch-action: none; }
+  .expr-preview {
+    display: block;
+    white-space: pre-wrap;
+  }
+  .expr-token-fn { color: #245ec7; font-weight: 600; }
+  .expr-token-var { color: #18794e; font-weight: 600; }
+  .expr-token-const { color: #7a3ec8; font-weight: 600; }
+  .expr-token-num { color: #9a6700; }
+  .expr-token-op { color: #6d6a62; }
 </style>
 </head>
 <body>
@@ -377,6 +386,39 @@ function formatFraction(num, den, suffix = '') {
   return den === 1 ? `${num}` : `${num}/${den}`;
 }
 
+function isSquareFree(n) {
+  for (let factor = 2; factor * factor <= n; factor++) {
+    if (n % (factor * factor) === 0) return false;
+  }
+  return true;
+}
+
+function bestRadicalFraction(value, maxCoeff = 12, maxDen = 24, maxRad = 24) {
+  let best = null;
+  const abs = Math.abs(value);
+  for (let rad = 2; rad <= maxRad; rad++) {
+    if (!isSquareFree(rad)) continue;
+    const root = Math.sqrt(rad);
+    for (let den = 1; den <= maxDen; den++) {
+      for (let coeff = 1; coeff <= maxCoeff; coeff++) {
+        const candidate = coeff * root / den;
+        const err = Math.abs(abs - candidate);
+        if (!best || err < best.err) best = { coeff, den, rad, err };
+      }
+    }
+  }
+  return best;
+}
+
+function formatRadicalFraction(value, coeff, den, rad) {
+  const sign = value < 0 ? '-' : '';
+  const factor = gcd(coeff, den);
+  const reducedCoeff = coeff / factor;
+  const reducedDen = den / factor;
+  const radical = reducedCoeff === 1 ? `√${rad}` : `${reducedCoeff}√${rad}`;
+  return reducedDen === 1 ? `${sign}${radical}` : `${sign}${radical}/${reducedDen}`;
+}
+
 function formatExactNumber(value) {
   if (Math.abs(value) < 1e-10) return '0';
   const constants = [
@@ -388,6 +430,11 @@ function formatExactNumber(value) {
     const frac = bestFraction(ratio, 24);
     const tolerance = Math.max(1e-6, Math.abs(value) * 2e-4);
     if (frac.err * Math.abs(base) < tolerance) return formatFraction(frac.num, frac.den, symbol);
+  }
+  const radical = bestRadicalFraction(value);
+  const radicalTolerance = Math.max(1e-6, Math.abs(value) * 2e-4);
+  if (radical && radical.err < radicalTolerance) {
+    return formatRadicalFraction(value, radical.coeff, radical.den, radical.rad);
   }
   const frac = bestFraction(value, 96);
   return formatFraction(frac.num, frac.den);
@@ -407,10 +454,39 @@ function getPointKey(point) {
 }
 
 const FUNC_SUBSCRIPTS = ['₀','₁','₂','₃','₄','₅','₆','₇','₈','₉'];
+const EXPR_FUNCTION_NAMES = new Set(['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'exp', 'ln', 'log', 'sqrt', 'abs', 'pow', 'sec', 'csc', 'cot']);
+const EXPR_CONSTANT_NAMES = new Set(['pi', 'e', 'tau']);
 
 function formatFnLabel(seq) {
   const n = Number.isFinite(seq) ? seq + 1 : 1;
   return 'f' + String(n).split('').map(d => FUNC_SUBSCRIPTS[+d] || d).join('');
+}
+
+function renderExpressionPreview(expr) {
+  if (!expr) return null;
+  const tokens = [];
+  const pattern = /\s+|[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?|./gu;
+  let match;
+  let index = 0;
+  while ((match = pattern.exec(expr))) {
+    const text = match[0];
+    let className = '';
+    if (/^\s+$/u.test(text)) {
+      className = '';
+    } else if (EXPR_FUNCTION_NAMES.has(text)) {
+      className = 'expr-token-fn';
+    } else if (EXPR_CONSTANT_NAMES.has(text)) {
+      className = 'expr-token-const';
+    } else if (text === 'x') {
+      className = 'expr-token-var';
+    } else if (/^\d+(?:\.\d+)?$/u.test(text)) {
+      className = 'expr-token-num';
+    } else if (/^[+\-*/^%=(),]$/u.test(text)) {
+      className = 'expr-token-op';
+    }
+    tokens.push(<span key={index++} className={className || undefined}>{text}</span>);
+  }
+  return tokens;
 }
 
 function nextFreeSeq(fns) {
@@ -1221,7 +1297,11 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly }) {
               textUnderlineOffset: 3,
             }}
           >
-            {fn.expr || <span style={{ color: theme.muted }}>click to enter an expression…</span>}
+            {fn.expr ? (
+              hasError ? fn.expr : <span className="expr-preview">{renderExpressionPreview(fn.expr)}</span>
+            ) : (
+              <span style={{ color: theme.muted }}>click to enter an expression…</span>
+            )}
           </div>
         )}
         {hasError && (
