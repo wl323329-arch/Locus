@@ -642,6 +642,13 @@ function dedupePoints(points, xTol, yTol) {
   return deduped;
 }
 
+function getImplicitSampleGrid(width, height) {
+  return {
+    cols: Math.max(48, Math.min(220, Math.ceil(width / 8))),
+    rows: Math.max(36, Math.min(180, Math.ceil(height / 8))),
+  };
+}
+
 function scanRoots(fn, xMin, xMax, sampleCount, yTol) {
   const roots = [];
   const pushRoot = (x) => {
@@ -710,14 +717,17 @@ function scanExtrema(fn, xMin, xMax, sampleCount) {
   return extrema;
 }
 
-function computeSpecialPoints(functions, xMin, xMax, yMin, yMax, scale, width) {
-  const visible = functions.filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit');
-  if (!visible.length || !Number.isFinite(xMin) || !Number.isFinite(xMax)) return [];
+function computeSpecialPoints(functions, implicitCurves, xMin, xMax, yMin, yMax, scale, width, height) {
+  const visibleExplicit = functions.filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit');
+  const visibleImplicit = implicitCurves || [];
+  if (!visibleExplicit.length && !visibleImplicit.length) return [];
+  if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || xMax <= xMin) return [];
   const sampleCount = Math.max(320, Math.min(1600, Math.floor(width * 1.5)));
   const yTol = Math.max(1e-6, 6 / scale);
+  const xTol = Math.max((xMax - xMin) / sampleCount * 2, 1e-6);
   const points = [];
 
-  visible.forEach((fn) => {
+  visibleExplicit.forEach((fn) => {
     const zeros = scanRoots(fn.compiled.evaluate, xMin, xMax, sampleCount, yTol);
     zeros.forEach((x) => {
       points.push({
@@ -734,10 +744,10 @@ function computeSpecialPoints(functions, xMin, xMax, yMin, yMax, scale, width) {
     });
   });
 
-  for (let i = 0; i < visible.length; i++) {
-    for (let j = i + 1; j < visible.length; j++) {
-      const leftFn = visible[i].compiled.evaluate;
-      const rightFn = visible[j].compiled.evaluate;
+  for (let i = 0; i < visibleExplicit.length; i++) {
+    for (let j = i + 1; j < visibleExplicit.length; j++) {
+      const leftFn = visibleExplicit[i].compiled.evaluate;
+      const rightFn = visibleExplicit[j].compiled.evaluate;
       const diff = (x) => leftFn(x) - rightFn(x);
       const roots = scanRoots(diff, xMin, xMax, sampleCount, yTol);
       roots.forEach((x) => {
@@ -745,17 +755,49 @@ function computeSpecialPoints(functions, xMin, xMax, yMin, yMax, scale, width) {
         if (!Number.isFinite(y)) return;
         points.push({
           type: 'intersection', x, y,
-          color: visible[i].color, color2: visible[j].color,
-          fnId: visible[i].id, fn2Id: visible[j].id,
-          label: visible[i].label, label2: visible[j].label,
+          color: visibleExplicit[i].color, color2: visibleExplicit[j].color,
+          fnId: visibleExplicit[i].id, fn2Id: visibleExplicit[j].id,
+          label: visibleExplicit[i].label, label2: visibleExplicit[j].label,
         });
       });
     }
   }
 
+  visibleExplicit.forEach((explicitFn) => {
+    visibleImplicit.forEach((implicitFn) => {
+      const diff = (x) => {
+        const y = evaluateSafe(explicitFn.compiled.evaluate, x);
+        if (!Number.isFinite(y)) return NaN;
+        return evaluateImplicitSafe(implicitFn.compiled, x, y);
+      };
+      const roots = scanRoots(diff, xMin, xMax, sampleCount, yTol);
+      roots.forEach((x) => {
+        const y = evaluateSafe(explicitFn.compiled.evaluate, x);
+        if (!Number.isFinite(y)) return;
+        points.push({
+          type: 'intersection',
+          x,
+          y,
+          color: explicitFn.color,
+          color2: implicitFn.color,
+          fnId: explicitFn.id,
+          fn2Id: implicitFn.id,
+          label: explicitFn.label,
+          label2: implicitFn.label,
+        });
+      });
+    });
+  });
+
+  points.push(...intersectImplicitCurves(
+    visibleImplicit,
+    xTol,
+    Math.max(yTol, (yMax - yMin) / Math.max(120, height)),
+  ));
+
   return dedupePoints(
     points.filter(point => point.y >= yMin - yTol * 4 && point.y <= yMax + yTol * 4),
-    (xMax - xMin) / sampleCount * 2,
+    xTol,
     yTol * 3,
   );
 }
@@ -842,6 +884,135 @@ function sampleImplicitSegments(compiled, bounds, cols, rows) {
   return segments;
 }
 
+function sampleVisibleImplicitCurves(functions, bounds, cols, rows) {
+  return functions
+    .filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'implicit')
+    .map(fn => ({ ...fn, segments: sampleImplicitSegments(fn.compiled, bounds, cols, rows) }))
+    .filter(fn => fn.segments.length);
+}
+
+function segmentIntersection(a, b, epsilon = 1e-9) {
+  const rX = a.bx - a.ax;
+  const rY = a.by - a.ay;
+  const sX = b.bx - b.ax;
+  const sY = b.by - b.ay;
+  const qmpX = b.ax - a.ax;
+  const qmpY = b.ay - a.ay;
+  const crossRS = rX * sY - rY * sX;
+
+  if (Math.abs(crossRS) < epsilon) {
+    const endpoints = [
+      { x: a.ax, y: a.ay },
+      { x: a.bx, y: a.by },
+      { x: b.ax, y: b.ay },
+      { x: b.bx, y: b.by },
+    ];
+    const near = endpoints.filter((point, index) => (
+      endpoints.findIndex((other) => Math.hypot(other.x - point.x, other.y - point.y) <= epsilon * 50) !== index
+    ));
+    if (!near.length) return null;
+    const sum = near.reduce((acc, point) => ({ x: acc.x + point.x, y: acc.y + point.y }), { x: 0, y: 0 });
+    return { x: sum.x / near.length, y: sum.y / near.length };
+  }
+
+  const t = (qmpX * sY - qmpY * sX) / crossRS;
+  const u = (qmpX * rY - qmpY * rX) / crossRS;
+  if (t < -epsilon || t > 1 + epsilon || u < -epsilon || u > 1 + epsilon) return null;
+  return {
+    x: a.ax + t * rX,
+    y: a.ay + t * rY,
+  };
+}
+
+function refineImplicitIntersection(leftCompiled, rightCompiled, seedX, seedY) {
+  let x = seedX;
+  let y = seedY;
+  for (let i = 0; i < 8; i++) {
+    const f = evaluateImplicitSafe(leftCompiled, x, y);
+    const g = evaluateImplicitSafe(rightCompiled, x, y);
+    if (!Number.isFinite(f) || !Number.isFinite(g)) return null;
+    if (Math.max(Math.abs(f), Math.abs(g)) < 1e-8) return { x, y };
+
+    const hx = Math.max(1e-4, Math.abs(x) * 1e-4);
+    const hy = Math.max(1e-4, Math.abs(y) * 1e-4);
+    const fx1 = evaluateImplicitSafe(leftCompiled, x + hx, y);
+    const fx0 = evaluateImplicitSafe(leftCompiled, x - hx, y);
+    const fy1 = evaluateImplicitSafe(leftCompiled, x, y + hy);
+    const fy0 = evaluateImplicitSafe(leftCompiled, x, y - hy);
+    const gx1 = evaluateImplicitSafe(rightCompiled, x + hx, y);
+    const gx0 = evaluateImplicitSafe(rightCompiled, x - hx, y);
+    const gy1 = evaluateImplicitSafe(rightCompiled, x, y + hy);
+    const gy0 = evaluateImplicitSafe(rightCompiled, x, y - hy);
+    if (![fx1, fx0, fy1, fy0, gx1, gx0, gy1, gy0].every(Number.isFinite)) return null;
+
+    const fx = (fx1 - fx0) / (2 * hx);
+    const fy = (fy1 - fy0) / (2 * hy);
+    const gx = (gx1 - gx0) / (2 * hx);
+    const gy = (gy1 - gy0) / (2 * hy);
+    const det = fx * gy - fy * gx;
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-10) return null;
+
+    const dx = (-f * gy + fy * g) / det;
+    const dy = (f * gx - fx * g) / det;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return null;
+
+    x += dx;
+    y += dy;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 1e-8) break;
+  }
+
+  const finalF = evaluateImplicitSafe(leftCompiled, x, y);
+  const finalG = evaluateImplicitSafe(rightCompiled, x, y);
+  if (!Number.isFinite(finalF) || !Number.isFinite(finalG)) return null;
+  return Math.max(Math.abs(finalF), Math.abs(finalG)) < 1e-5 ? { x, y } : null;
+}
+
+function intersectImplicitCurves(curves, xTol, yTol) {
+  const points = [];
+  const decorateSegments = (segments) => segments.map((segment) => ({
+    ...segment,
+    minX: Math.min(segment.ax, segment.bx),
+    maxX: Math.max(segment.ax, segment.bx),
+    minY: Math.min(segment.ay, segment.by),
+    maxY: Math.max(segment.ay, segment.by),
+  }));
+
+  for (let i = 0; i < curves.length; i++) {
+    const left = curves[i];
+    const leftSegments = decorateSegments(left.segments);
+    for (let j = i + 1; j < curves.length; j++) {
+      const right = curves[j];
+      const rightSegments = decorateSegments(right.segments);
+      leftSegments.forEach((segmentA) => {
+        rightSegments.forEach((segmentB) => {
+          if (
+            segmentA.maxX < segmentB.minX - xTol ||
+            segmentB.maxX < segmentA.minX - xTol ||
+            segmentA.maxY < segmentB.minY - yTol ||
+            segmentB.maxY < segmentA.minY - yTol
+          ) return;
+          const hit = segmentIntersection(segmentA, segmentB, Math.max(xTol, yTol) * 0.25);
+          if (!hit || !Number.isFinite(hit.x) || !Number.isFinite(hit.y)) return;
+          const refined = refineImplicitIntersection(left.compiled, right.compiled, hit.x, hit.y) || hit;
+          points.push({
+            type: 'intersection',
+            x: refined.x,
+            y: refined.y,
+            color: left.color,
+            color2: right.color,
+            fnId: left.id,
+            fn2Id: right.id,
+            label: left.label,
+            label2: right.label,
+          });
+        });
+      });
+    }
+  }
+
+  return dedupePoints(points, xTol, yTol);
+}
+
 function closestPointOnSegment(point, a, b) {
   const abx = b.x - a.x;
   const aby = b.y - a.y;
@@ -853,12 +1024,62 @@ function closestPointOnSegment(point, a, b) {
   return { x, y, t, dist: Math.hypot(point.x - x, point.y - y) };
 }
 
-function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
+function differentiateExplicit(compiled, x, scale) {
+  if (!compiled || compiled.kind !== 'explicit') return null;
+  const h = Math.max(1e-4, Math.abs(x) * 1e-4, 2 / Math.max(scale, 1));
+  const left = evaluateExplicitSafe(compiled, x - h);
+  const right = evaluateExplicitSafe(compiled, x + h);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return null;
+  return (right - left) / (2 * h);
+}
+
+function differentiateImplicit(compiled, x, y, scale) {
+  if (!compiled || compiled.kind !== 'implicit') return null;
+  const hx = Math.max(1e-4, Math.abs(x) * 1e-4, 2 / Math.max(scale, 1));
+  const hy = Math.max(1e-4, Math.abs(y) * 1e-4, 2 / Math.max(scale, 1));
+  const fx1 = evaluateImplicitSafe(compiled, x + hx, y);
+  const fx0 = evaluateImplicitSafe(compiled, x - hx, y);
+  const fy1 = evaluateImplicitSafe(compiled, x, y + hy);
+  const fy0 = evaluateImplicitSafe(compiled, x, y - hy);
+  if (![fx1, fx0, fy1, fy0].every(Number.isFinite)) return null;
+  return {
+    fx: (fx1 - fx0) / (2 * hx),
+    fy: (fy1 - fy0) / (2 * hy),
+  };
+}
+
+function getTangentLine(fn, point, scale) {
+  if (!fn || !fn.compiled || !point) return null;
+  if (fn.compiled.kind === 'explicit') {
+    const slope = differentiateExplicit(fn.compiled, point.x, scale);
+    if (!Number.isFinite(slope)) return null;
+    return { type: 'slope', x: point.x, y: point.y, slope };
+  }
+  const gradient = differentiateImplicit(fn.compiled, point.x, point.y, scale);
+  if (!gradient) return null;
+  if (Math.abs(gradient.fx) < 1e-8 && Math.abs(gradient.fy) < 1e-8) return null;
+  if (Math.abs(gradient.fy) < 1e-8) return { type: 'vertical', x: point.x, y: point.y };
+  return { type: 'slope', x: point.x, y: point.y, slope: -gradient.fx / gradient.fy };
+}
+
+function PlotCanvas({
+  functions,
+  view,
+  setView,
+  theme,
+  onTrace,
+  coordMode,
+  selectedFunctionId,
+  tangentMode,
+  tangentPoint,
+  onTangentChange,
+}) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
   const [mouse, setMouse] = useState(null);
   const draggingRef = useRef(null);
+  const tangentDragRef = useRef(false);
   const [labelFade, setLabelFade] = useState(null);
   const [revealedPointKey, setRevealedPointKey] = useState(null);
   const revealTimerRef = useRef(null);
@@ -906,17 +1127,25 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
     return { wxMin, wxMax, wyMin, wyMax };
   }, [screenToWorld, size]);
 
+  const implicitGrid = useMemo(() => getImplicitSampleGrid(size.w, size.h), [size.h, size.w]);
+
+  const implicitCurveSamples = useMemo(() => (
+    sampleVisibleImplicitCurves(functions, worldBounds, implicitGrid.cols, implicitGrid.rows)
+  ), [functions, implicitGrid.cols, implicitGrid.rows, worldBounds]);
+
   const specialPoints = useMemo(() => (
     computeSpecialPoints(
       functions,
+      implicitCurveSamples,
       worldBounds.wxMin,
       worldBounds.wxMax,
       worldBounds.wyMin,
       worldBounds.wyMax,
       view.scale,
       size.w,
+      size.h,
     )
-  ), [functions, worldBounds, view.scale, size.w]);
+  ), [functions, implicitCurveSamples, worldBounds, view.scale, size.h, size.w]);
 
   const pointOverlay = useMemo(() => {
     const screenPoints = specialPoints
@@ -939,13 +1168,10 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
     };
   }, [mouse, size, specialPoints, worldToScreen]);
 
-  const implicitCurves = useMemo(() => {
-    const cols = Math.max(48, Math.min(220, Math.ceil(size.w / 8)));
-    const rows = Math.max(36, Math.min(180, Math.ceil(size.h / 8)));
-    return functions
-      .filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'implicit')
+  const implicitCurves = useMemo(() => (
+    implicitCurveSamples
       .map((fn) => {
-        const segments = sampleImplicitSegments(fn.compiled, worldBounds, cols, rows)
+        const segments = fn.segments
           .map((segment) => {
             const aScreen = worldToScreen(segment.ax, segment.ay);
             const bScreen = worldToScreen(segment.bx, segment.by);
@@ -970,8 +1196,61 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
         });
         return { ...fn, segments, anchor };
       })
-      .filter(fn => fn.segments.length);
-  }, [functions, size.h, size.w, worldBounds, worldToScreen]);
+      .filter(fn => fn.segments.length)
+  ), [implicitCurveSamples, size.h, size.w, worldToScreen]);
+
+  const selectedFunction = useMemo(
+    () => functions.find((fn) => fn.id === selectedFunctionId) || null,
+    [functions, selectedFunctionId],
+  );
+  const selectedImplicitCurve = useMemo(
+    () => implicitCurves.find((fn) => fn.id === selectedFunctionId) || null,
+    [implicitCurves, selectedFunctionId],
+  );
+
+  const findPointOnSelectedCurve = useCallback((screenPoint, allowLoose = false) => {
+    if (!selectedFunction || !selectedFunction.visible || !selectedFunction.compiled) return null;
+    if (selectedFunction.compiled.kind === 'explicit') {
+      const [wx] = screenToWorld(screenPoint.x, screenPoint.y);
+      const y = evaluateExplicitSafe(selectedFunction.compiled, wx);
+      if (!Number.isFinite(y)) return null;
+      const [sx, sy] = worldToScreen(wx, y);
+      const dist = Math.hypot(sx - screenPoint.x, sy - screenPoint.y);
+      if (!allowLoose && dist > 18) return null;
+      return { x: wx, y, sx, sy, dist };
+    }
+    if (!selectedImplicitCurve) return null;
+    let best = null;
+    selectedImplicitCurve.segments.forEach((segment) => {
+      const closest = closestPointOnSegment(
+        screenPoint,
+        { x: segment.asx, y: segment.asy },
+        { x: segment.bsx, y: segment.bsy },
+      );
+      if (!best || closest.dist < best.dist) {
+        best = {
+          x: segment.ax + (segment.bx - segment.ax) * closest.t,
+          y: segment.ay + (segment.by - segment.ay) * closest.t,
+          sx: closest.x,
+          sy: closest.y,
+          dist: closest.dist,
+        };
+      }
+    });
+    if (!allowLoose && best && best.dist > 18) return null;
+    return best;
+  }, [screenToWorld, selectedFunction, selectedImplicitCurve, worldToScreen]);
+
+  const tangentScreenPoint = useMemo(() => {
+    if (!tangentPoint || tangentPoint.fnId !== selectedFunctionId) return null;
+    const [sx, sy] = worldToScreen(tangentPoint.x, tangentPoint.y);
+    return { ...tangentPoint, sx, sy };
+  }, [selectedFunctionId, tangentPoint, worldToScreen]);
+
+  const tangentLine = useMemo(() => {
+    if (!selectedFunction || !tangentPoint || tangentPoint.fnId !== selectedFunction.id) return null;
+    return getTangentLine(selectedFunction, tangentPoint, view.scale);
+  }, [selectedFunction, tangentPoint, view.scale]);
 
   const curveTracker = useMemo(() => {
     if (!mouse) return null;
@@ -1172,6 +1451,40 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
       if (fn.anchor && fn.label) labelAnchors.push({ label: fn.label, color: fn.color, sx: fn.anchor.sx, sy: fn.anchor.sy });
     });
 
+    if (tangentLine && tangentScreenPoint) {
+      ctx.save();
+      ctx.strokeStyle = selectedFunction?.color || theme.ink;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([8, 6]);
+      ctx.beginPath();
+      if (tangentLine.type === 'vertical') {
+        const [sx] = worldToScreen(tangentLine.x, tangentLine.y);
+        ctx.moveTo(sx, 0);
+        ctx.lineTo(sx, size.h);
+      } else {
+        const leftY = tangentLine.y + tangentLine.slope * (worldBounds.wxMin - tangentLine.x);
+        const rightY = tangentLine.y + tangentLine.slope * (worldBounds.wxMax - tangentLine.x);
+        const [lsx, lsy] = worldToScreen(worldBounds.wxMin, leftY);
+        const [rsx, rsy] = worldToScreen(worldBounds.wxMax, rightY);
+        ctx.moveTo(lsx, lsy);
+        ctx.lineTo(rsx, rsy);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = theme.panel;
+      ctx.strokeStyle = selectedFunction?.color || theme.ink;
+      ctx.lineWidth = tangentMode ? 2.5 : 2;
+      ctx.beginPath();
+      ctx.arc(tangentScreenPoint.sx, tangentScreenPoint.sy, tangentMode ? 6 : 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = selectedFunction?.color || theme.ink;
+      ctx.beginPath();
+      ctx.arc(tangentScreenPoint.sx, tangentScreenPoint.sy, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     // Function labels near the right edge of each curve
     if (labelAnchors.length) {
       ctx.save();
@@ -1352,19 +1665,61 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
         { titleLines: tracker.fn.label ? [tracker.fn.label] : [], color: tracker.fn.color, showCrosshair: false },
       );
     }
-  }, [coordMode, implicitCurves, labelFade, pointOverlay, size, theme, view, visiblePoint, curveTracker, showCurveTrace, worldBounds, worldToScreen, screenToWorld, functions]);
+  }, [
+    coordMode,
+    curveTracker,
+    functions,
+    implicitCurves,
+    labelFade,
+    pointOverlay,
+    screenToWorld,
+    selectedFunction,
+    showCurveTrace,
+    size,
+    tangentLine,
+    tangentMode,
+    tangentScreenPoint,
+    theme,
+    view,
+    visiblePoint,
+    worldBounds,
+    worldToScreen,
+  ]);
 
   useEffect(() => { draw(); }, [draw]);
 
   const pinchRef = useRef(null);
 
   const onMouseDown = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const nextMouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    if (tangentMode && selectedFunction) {
+      const handleDist = tangentScreenPoint ? Math.hypot(nextMouse.x - tangentScreenPoint.sx, nextMouse.y - tangentScreenPoint.sy) : Infinity;
+      if (handleDist <= 12) {
+        tangentDragRef.current = true;
+        setMouse(nextMouse);
+        return;
+      }
+      const curvePoint = findPointOnSelectedCurve(nextMouse);
+      if (curvePoint) {
+        tangentDragRef.current = true;
+        onTangentChange({ fnId: selectedFunction.id, x: curvePoint.x, y: curvePoint.y });
+        setMouse(nextMouse);
+        return;
+      }
+    }
     draggingRef.current = { x: e.clientX, y: e.clientY, view: { ...view } };
     setMouse(null);
   };
   const onMouseMove = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
     const nextMouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    if (tangentDragRef.current && tangentMode && selectedFunction) {
+      const curvePoint = findPointOnSelectedCurve(nextMouse, true);
+      if (curvePoint) onTangentChange({ fnId: selectedFunction.id, x: curvePoint.x, y: curvePoint.y });
+      setMouse(nextMouse);
+      return;
+    }
     if (draggingRef.current) {
       const dx = e.clientX - draggingRef.current.x;
       const dy = e.clientY - draggingRef.current.y;
@@ -1378,8 +1733,8 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
     }
     setMouse(nextMouse);
   };
-  const onMouseUp = () => { draggingRef.current = null; };
-  const onMouseLeave = () => { draggingRef.current = null; setMouse(null); };
+  const onMouseUp = () => { draggingRef.current = null; tangentDragRef.current = false; };
+  const onMouseLeave = () => { draggingRef.current = null; tangentDragRef.current = false; setMouse(null); };
   const onWheel = (e) => {
     e.preventDefault();
     const rect = canvasRef.current.getBoundingClientRect();
@@ -1455,14 +1810,14 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
         onWheel={onWheel}
         onTouchStart={onTouchStart} onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd} onTouchCancel={onTouchEnd}
-        style={{ display: 'block', cursor: draggingRef.current ? 'grabbing' : 'crosshair' }}
+        style={{ display: 'block', cursor: draggingRef.current || tangentDragRef.current ? 'grabbing' : 'crosshair' }}
         aria-label="Function plot canvas"
       />
     </div>
   );
 }
 
-function FunctionRow({ fn, theme, onChange, onDelete, isOnly }) {
+function FunctionRow({ fn, theme, onChange, onDelete, isOnly, selected, onSelect }) {
   const [editing, setEditing] = useState(!fn.expr);
   const [draft, setDraft] = useState(fn.expr);
   const inputRef = useRef(null);
@@ -1480,13 +1835,20 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly }) {
   const descriptor = curveKind === 'implicit' ? `${label}(x, y)` : `${label}(x) =`;
 
   return (
-    <div style={{
-      display: 'flex', alignItems: 'stretch',
-      borderBottom: `1px solid ${theme.rule}`,
-      background: theme.panel,
-    }}>
+    <div
+      onClick={onSelect}
+      style={{
+        display: 'flex', alignItems: 'stretch',
+        borderBottom: `1px solid ${theme.rule}`,
+        background: selected ? theme.chip : theme.panel,
+        boxShadow: selected ? `inset 2px 0 0 ${fn.color}` : 'none',
+      }}
+    >
       <button
-        onClick={() => onChange({ ...fn, visible: !fn.visible })}
+        onClick={(e) => {
+          e.stopPropagation();
+          onChange({ ...fn, visible: !fn.visible });
+        }}
         title={fn.visible ? 'Hide' : 'Show'}
         aria-label={fn.visible ? `Hide ${label}` : `Show ${label}`}
         style={{
@@ -1514,6 +1876,7 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly }) {
         {editing ? (
           <input
             ref={inputRef} value={draft}
+            onClick={(e) => e.stopPropagation()}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={commit}
             onKeyDown={(e) => {
@@ -1531,7 +1894,11 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly }) {
           />
         ) : (
           <div
-            onClick={() => setEditing(true)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect();
+              setEditing(true);
+            }}
             style={{
               fontFamily: '"JetBrains Mono", monospace', fontSize: 14,
               color: hasError ? '#c94a3a' : theme.ink,
@@ -1553,11 +1920,27 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly }) {
             {fn.error}
           </div>
         )}
+        {selected && (
+          <div style={{
+            marginTop: 6,
+            fontFamily: '"JetBrains Mono", monospace',
+            fontSize: 10,
+            color: fn.color,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+          }}>
+            selected
+          </div>
+        )}
       </div>
 
       {!isOnly && (
         <button
-          onClick={onDelete} title="Remove" aria-label={`Remove ${label}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title="Remove" aria-label={`Remove ${label}`}
           style={{
             width: 32, border: 'none', background: 'transparent',
             color: theme.muted, cursor: 'pointer',
@@ -1592,7 +1975,23 @@ function SidebarButton({ children, onClick, theme }) {
   );
 }
 
-function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, traceInfo, onExport, onCollapse, width, themeKey, pickTheme, coordMode, onFitView }) {
+function ExpandedSidebarInner({
+  functions,
+  setFunctions,
+  theme,
+  view,
+  setView,
+  traceInfo,
+  onExport,
+  onCollapse,
+  width,
+  themeKey,
+  pickTheme,
+  coordMode,
+  onFitView,
+  selectedFunctionId,
+  onSelectFunction,
+}) {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const themeMenuRef = useRef(null);
   const addFn = () => {
@@ -1763,6 +2162,8 @@ function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, t
             onChange={(next) => updateFn(i, next)}
             onDelete={() => deleteFn(i)}
             isOnly={functions.length === 1}
+            selected={fn.id === selectedFunctionId}
+            onSelect={() => onSelectFunction(fn.id)}
           />
         ))}
         {functions.length === 0 && (
@@ -2008,6 +2409,9 @@ function App() {
     return { cx: 0, cy: 0, scale: 50 };
   });
 
+  const [selectedFunctionId, setSelectedFunctionId] = useState(null);
+  const [tangentMode, setTangentMode] = useState(false);
+  const [tangentPoint, setTangentPoint] = useState(null);
   const [traceInfo, setTraceInfo] = useState(null);
   const [showTweaks, setShowTweaks] = useState(false);
   const [tweaksOpen, setTweaksOpen] = useState(false);
@@ -2067,6 +2471,25 @@ function App() {
       }
     });
   }, [functions]);
+
+  useEffect(() => {
+    if (compiledFunctions.some((fn) => fn.id === selectedFunctionId)) return;
+    setSelectedFunctionId(compiledFunctions[0]?.id || null);
+  }, [compiledFunctions, selectedFunctionId]);
+
+  useEffect(() => {
+    if (!tangentPoint) return;
+    const fn = compiledFunctions.find((item) => item.id === tangentPoint.fnId);
+    if (!fn || !fn.compiled || !fn.visible) {
+      setTangentPoint(null);
+      return;
+    }
+    if (fn.compiled.kind === 'explicit') {
+      const y = evaluateExplicitSafe(fn.compiled, tangentPoint.x);
+      if (!Number.isFinite(y)) setTangentPoint(null);
+      else if (Math.abs(y - tangentPoint.y) > 1e-6) setTangentPoint((prev) => prev ? { ...prev, y } : prev);
+    }
+  }, [compiledFunctions, tangentPoint]);
 
   const prevThemeRef = useRef(themeKey);
   useEffect(() => {
@@ -2222,6 +2645,8 @@ function App() {
         onExport={exportPNG}
         onFitView={fitView}
         onToggleVisibility={toggleVisibility}
+        selectedFunctionId={selectedFunctionId}
+        onSelectFunction={setSelectedFunctionId}
         collapsed={collapsed}
         expandedWidth={sidebarWidth}
         onCollapse={() => setCollapsed(true)}
@@ -2234,9 +2659,15 @@ function App() {
         <PlotCanvas
           functions={compiledFunctions}
           view={view} setView={setView}
-          theme={theme} onTrace={setTraceInfo} coordMode={coordMode}
+          theme={theme}
+          onTrace={setTraceInfo}
+          coordMode={coordMode}
+          selectedFunctionId={selectedFunctionId}
+          tangentMode={tangentMode}
+          tangentPoint={tangentPoint}
+          onTangentChange={setTangentPoint}
         />
-        <div style={{ position: 'absolute', top: 16, right: 16 }}>
+        <div style={{ position: 'absolute', top: 16, right: 16, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           <div className="coord-mode-switch" style={{ color: theme.muted, background: theme.panel, borderColor: theme.rule }}>
             <button
               className={coordMode === COORD_MODES.exact ? 'active' : ''}
@@ -2253,6 +2684,23 @@ function App() {
               style={{ color: coordMode === COORD_MODES.decimal ? theme.ink : theme.muted, background: coordMode === COORD_MODES.decimal ? theme.chip : 'transparent' }}
             >Decimal</button>
           </div>
+          <div className="coord-mode-switch" style={{ color: theme.muted, background: theme.panel, borderColor: theme.rule }}>
+            <button
+              className={tangentMode ? 'active' : ''}
+              onClick={() => setTangentMode((value) => !value)}
+              title={selectedFunctionId ? 'Set and drag a tangent point on the selected curve' : 'Select a curve first'}
+              aria-label="Toggle tangent mode"
+              style={{ color: selectedFunctionId ? (tangentMode ? theme.ink : theme.muted) : theme.ruleStrong, background: tangentMode ? theme.chip : 'transparent' }}
+            >Tangent</button>
+            {tangentPoint && (
+              <button
+                onClick={() => setTangentPoint(null)}
+                title="Clear tangent"
+                aria-label="Clear tangent"
+                style={{ color: theme.muted }}
+              >Clear</button>
+            )}
+          </div>
         </div>
         <div style={{
           position: 'absolute', bottom: 14, left: 14,
@@ -2264,6 +2712,7 @@ function App() {
           <span>drag · pan</span>
           <span>scroll · zoom</span>
           <span>hover · trace</span>
+          <span>{tangentMode ? (selectedFunctionId ? 'click/drag · tangent' : 'select curve · tangent') : 'tangent · off'}</span>
           <span>+ − 0 F · keys</span>
         </div>
       </main>
