@@ -224,14 +224,15 @@
       }
       throw new Error('Unexpected token');
     }
-    let lhsEnd = -1;
-    for (let i = 0; i < Math.min(tokens.length, 8); i++) {
-      if (tokens[i].k === TOKEN.OP && tokens[i].v === '=') { lhsEnd = i; break; }
+    const left = expr();
+    if (peek().k === TOKEN.OP && peek().v === '=') {
+      p++;
+      const right = expr();
+      if (peek().k !== TOKEN.END) throw new Error('Trailing tokens');
+      return { op: '=', left, right };
     }
-    if (lhsEnd >= 0) p = lhsEnd + 1;
-    const tree = expr();
     if (peek().k !== TOKEN.END) throw new Error('Trailing tokens');
-    return tree;
+    return left;
   }
   function evalNode(node, scope) {
     if (node.num !== undefined) return node.num;
@@ -259,11 +260,69 @@
     sec: x => 1 / Math.cos(x), csc: x => 1 / Math.sin(x), cot: x => 1 / Math.tan(x),
     pi: Math.PI, e: Math.E, tau: 2 * Math.PI,
   };
+
+  function collectVariables(node, vars = new Set()) {
+    if (!node) return vars;
+    if (node.num !== undefined) return vars;
+    if (node.id !== undefined) {
+      if (!(node.id in EXTRA) && !(node.id in Math)) vars.add(node.id);
+      return vars;
+    }
+    if (node.call !== undefined) {
+      node.args.forEach((arg) => collectVariables(arg, vars));
+      return vars;
+    }
+    if (node.op === 'neg') return collectVariables(node.arg, vars);
+    collectVariables(node.left, vars);
+    collectVariables(node.right, vars);
+    return vars;
+  }
+
+  function buildEvaluator(node) {
+    return (vars = {}) => evalNode(node, { ...EXTRA, ...vars });
+  }
+
   window.LocusMath = {
     parse,
     compile(src) {
       const tree = parse(src);
-      return (x, vars = {}) => evalNode(tree, { x, ...EXTRA, ...vars });
+      if (tree.op === '=') {
+        const leftVars = collectVariables(tree.left);
+        const rightVars = collectVariables(tree.right);
+        if (tree.left.id === 'y' && !rightVars.has('y')) {
+          const explicit = buildEvaluator(tree.right);
+          return {
+            kind: 'explicit',
+            evaluate: (x) => explicit({ x }),
+          };
+        }
+        if (tree.right.id === 'y' && !leftVars.has('y')) {
+          const explicit = buildEvaluator(tree.left);
+          return {
+            kind: 'explicit',
+            evaluate: (x) => explicit({ x }),
+          };
+        }
+        const left = buildEvaluator(tree.left);
+        const right = buildEvaluator(tree.right);
+        return {
+          kind: 'implicit',
+          evaluate: (x, y) => left({ x, y }) - right({ x, y }),
+        };
+      }
+
+      const vars = collectVariables(tree);
+      const evaluate = buildEvaluator(tree);
+      if (vars.has('y')) {
+        return {
+          kind: 'implicit',
+          evaluate: (x, y) => evaluate({ x, y }),
+        };
+      }
+      return {
+        kind: 'explicit',
+        evaluate: (x) => evaluate({ x }),
+      };
     },
   };
 })();
@@ -457,6 +516,16 @@ const FUNC_SUBSCRIPTS = ['₀','₁','₂','₃','₄','₅','₆','₇','₈','
 const EXPR_FUNCTION_NAMES = new Set(['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'exp', 'ln', 'log', 'sqrt', 'abs', 'pow', 'sec', 'csc', 'cot']);
 const EXPR_CONSTANT_NAMES = new Set(['pi', 'e', 'tau']);
 
+function inferCurveKindFromExpr(expr) {
+  const compact = (expr || '').replace(/\s+/g, '');
+  if (!compact) return 'explicit';
+  if (compact.includes('y')) {
+    if (/^y=.+$/u.test(compact) || /^.+=y$/u.test(compact)) return 'explicit';
+    return 'implicit';
+  }
+  return compact.includes('=') ? 'implicit' : 'explicit';
+}
+
 function formatFnLabel(seq) {
   const n = Number.isFinite(seq) ? seq + 1 : 1;
   return 'f' + String(n).split('').map(d => FUNC_SUBSCRIPTS[+d] || d).join('');
@@ -477,7 +546,7 @@ function renderExpressionPreview(expr) {
       className = 'expr-token-fn';
     } else if (EXPR_CONSTANT_NAMES.has(text)) {
       className = 'expr-token-const';
-    } else if (text === 'x') {
+    } else if (text === 'x' || text === 'y') {
       className = 'expr-token-var';
     } else if (/^\d+(?:\.\d+)?$/u.test(text)) {
       className = 'expr-token-num';
@@ -517,6 +586,21 @@ function evaluateSafe(fn, x) {
   try {
     const y = fn(x);
     return Number.isFinite(y) ? y : NaN;
+  } catch {
+    return NaN;
+  }
+}
+
+function evaluateExplicitSafe(compiled, x) {
+  if (!compiled || compiled.kind !== 'explicit') return NaN;
+  return evaluateSafe(compiled.evaluate, x);
+}
+
+function evaluateImplicitSafe(compiled, x, y) {
+  if (!compiled || compiled.kind !== 'implicit') return NaN;
+  try {
+    const value = compiled.evaluate(x, y);
+    return Number.isFinite(value) ? value : NaN;
   } catch {
     return NaN;
   }
@@ -627,21 +711,21 @@ function scanExtrema(fn, xMin, xMax, sampleCount) {
 }
 
 function computeSpecialPoints(functions, xMin, xMax, yMin, yMax, scale, width) {
-  const visible = functions.filter(fn => fn.visible && fn.compiled);
+  const visible = functions.filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit');
   if (!visible.length || !Number.isFinite(xMin) || !Number.isFinite(xMax)) return [];
   const sampleCount = Math.max(320, Math.min(1600, Math.floor(width * 1.5)));
   const yTol = Math.max(1e-6, 6 / scale);
   const points = [];
 
   visible.forEach((fn) => {
-    const zeros = scanRoots(fn.compiled, xMin, xMax, sampleCount, yTol);
+    const zeros = scanRoots(fn.compiled.evaluate, xMin, xMax, sampleCount, yTol);
     zeros.forEach((x) => {
       points.push({
         type: 'zero', x, y: 0,
         color: fn.color, fnId: fn.id, label: fn.label,
       });
     });
-    const extrema = scanExtrema(fn.compiled, xMin, xMax, Math.min(sampleCount, 900));
+    const extrema = scanExtrema(fn.compiled.evaluate, xMin, xMax, Math.min(sampleCount, 900));
     extrema.forEach(({ x, y, type }) => {
       points.push({
         type, x, y,
@@ -652,8 +736,8 @@ function computeSpecialPoints(functions, xMin, xMax, yMin, yMax, scale, width) {
 
   for (let i = 0; i < visible.length; i++) {
     for (let j = i + 1; j < visible.length; j++) {
-      const leftFn = visible[i].compiled;
-      const rightFn = visible[j].compiled;
+      const leftFn = visible[i].compiled.evaluate;
+      const rightFn = visible[j].compiled.evaluate;
       const diff = (x) => leftFn(x) - rightFn(x);
       const roots = scanRoots(diff, xMin, xMax, sampleCount, yTol);
       roots.forEach((x) => {
@@ -674,6 +758,99 @@ function computeSpecialPoints(functions, xMin, xMax, yMin, yMax, scale, width) {
     (xMax - xMin) / sampleCount * 2,
     yTol * 3,
   );
+}
+
+function interpolateIsoPoint(a, b, fa, fb) {
+  if (Math.abs(fa) < 1e-12 && Math.abs(fb) < 1e-12) return (a + b) / 2;
+  if (Math.abs(fa - fb) < 1e-12) return (a + b) / 2;
+  const t = Math.max(0, Math.min(1, fa / (fa - fb)));
+  return a + (b - a) * t;
+}
+
+function sampleImplicitSegments(compiled, bounds, cols, rows) {
+  if (!compiled || compiled.kind !== 'implicit') return [];
+  const { wxMin, wxMax, wyMin, wyMax } = bounds;
+  if (!Number.isFinite(wxMin + wxMax + wyMin + wyMax) || wxMax <= wxMin || wyMax <= wyMin) return [];
+  const dx = (wxMax - wxMin) / cols;
+  const dy = (wyMax - wyMin) / rows;
+  const values = Array.from({ length: rows + 1 }, () => Array(cols + 1).fill(NaN));
+
+  for (let row = 0; row <= rows; row++) {
+    const y = wyMax - row * dy;
+    for (let col = 0; col <= cols; col++) {
+      const x = wxMin + col * dx;
+      values[row][col] = evaluateImplicitSafe(compiled, x, y);
+    }
+  }
+
+  const segments = [];
+  const pushSegment = (p1, p2) => {
+    if (!p1 || !p2) return;
+    segments.push({ ax: p1.x, ay: p1.y, bx: p2.x, by: p2.y });
+  };
+
+  for (let row = 0; row < rows; row++) {
+    const yTop = wyMax - row * dy;
+    const yBottom = yTop - dy;
+    for (let col = 0; col < cols; col++) {
+      const xLeft = wxMin + col * dx;
+      const xRight = xLeft + dx;
+      const tl = values[row][col];
+      const tr = values[row][col + 1];
+      const br = values[row + 1][col + 1];
+      const bl = values[row + 1][col];
+      if (![tl, tr, br, bl].every(Number.isFinite)) continue;
+
+      const points = {};
+      const maybeTop = (tl === 0 || tr === 0 || tl * tr < 0)
+        ? { x: interpolateIsoPoint(xLeft, xRight, tl, tr), y: yTop }
+        : null;
+      const maybeRight = (tr === 0 || br === 0 || tr * br < 0)
+        ? { x: xRight, y: interpolateIsoPoint(yTop, yBottom, tr, br) }
+        : null;
+      const maybeBottom = (br === 0 || bl === 0 || br * bl < 0)
+        ? { x: interpolateIsoPoint(xRight, xLeft, br, bl), y: yBottom }
+        : null;
+      const maybeLeft = (bl === 0 || tl === 0 || bl * tl < 0)
+        ? { x: xLeft, y: interpolateIsoPoint(yBottom, yTop, bl, tl) }
+        : null;
+
+      if (maybeTop) points.top = maybeTop;
+      if (maybeRight) points.right = maybeRight;
+      if (maybeBottom) points.bottom = maybeBottom;
+      if (maybeLeft) points.left = maybeLeft;
+
+      const hits = Object.entries(points);
+      if (hits.length === 2) {
+        pushSegment(hits[0][1], hits[1][1]);
+        continue;
+      }
+      if (hits.length !== 4) continue;
+
+      const center = evaluateImplicitSafe(compiled, (xLeft + xRight) / 2, (yTop + yBottom) / 2);
+      const centerMatchesTL = center >= 0 ? tl >= 0 : tl < 0;
+      if (centerMatchesTL) {
+        pushSegment(points.top, points.right);
+        pushSegment(points.bottom, points.left);
+      } else {
+        pushSegment(points.top, points.left);
+        pushSegment(points.right, points.bottom);
+      }
+    }
+  }
+
+  return segments;
+}
+
+function closestPointOnSegment(point, a, b) {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const lenSq = abx * abx + aby * aby;
+  if (lenSq < 1e-9) return { x: a.x, y: a.y, t: 0, dist: Math.hypot(point.x - a.x, point.y - a.y) };
+  const t = Math.max(0, Math.min(1, ((point.x - a.x) * abx + (point.y - a.y) * aby) / lenSq));
+  const x = a.x + abx * t;
+  const y = a.y + aby * t;
+  return { x, y, t, dist: Math.hypot(point.x - x, point.y - y) };
 }
 
 function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
@@ -762,20 +939,73 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
     };
   }, [mouse, size, specialPoints, worldToScreen]);
 
+  const implicitCurves = useMemo(() => {
+    const cols = Math.max(48, Math.min(220, Math.ceil(size.w / 8)));
+    const rows = Math.max(36, Math.min(180, Math.ceil(size.h / 8)));
+    return functions
+      .filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'implicit')
+      .map((fn) => {
+        const segments = sampleImplicitSegments(fn.compiled, worldBounds, cols, rows)
+          .map((segment) => {
+            const aScreen = worldToScreen(segment.ax, segment.ay);
+            const bScreen = worldToScreen(segment.bx, segment.by);
+            return {
+              ...segment,
+              asx: aScreen[0], asy: aScreen[1],
+              bsx: bScreen[0], bsy: bScreen[1],
+            };
+          })
+          .filter((segment) => (
+            Math.max(segment.asx, segment.bsx) >= -24 &&
+            Math.min(segment.asx, segment.bsx) <= size.w + 24 &&
+            Math.max(segment.asy, segment.bsy) >= -24 &&
+            Math.min(segment.asy, segment.bsy) <= size.h + 24
+          ));
+
+        let anchor = null;
+        segments.forEach((segment) => {
+          const sx = (segment.asx + segment.bsx) / 2;
+          const sy = (segment.asy + segment.bsy) / 2;
+          if (!anchor || sx > anchor.sx) anchor = { sx, sy };
+        });
+        return { ...fn, segments, anchor };
+      })
+      .filter(fn => fn.segments.length);
+  }, [functions, size.h, size.w, worldBounds, worldToScreen]);
+
   const curveTracker = useMemo(() => {
     if (!mouse) return null;
     const [wx] = screenToWorld(mouse.x, mouse.y);
     let best = null;
     functions.forEach((fn) => {
-      if (!fn.visible || !fn.compiled) return;
-      const y = evaluateSafe(fn.compiled, wx);
+      if (!fn.visible || !fn.compiled || fn.compiled.kind !== 'explicit') return;
+      const y = evaluateExplicitSafe(fn.compiled, wx);
       if (!Number.isFinite(y)) return;
       const [, sy] = worldToScreen(wx, y);
       const dist = Math.abs(sy - mouse.y);
       if (!best || dist < best.dist) best = { fn, x: wx, y, sx: mouse.x, sy, dist };
     });
+    implicitCurves.forEach((fn) => {
+      fn.segments.forEach((segment) => {
+        const closest = closestPointOnSegment(
+          mouse,
+          { x: segment.asx, y: segment.asy },
+          { x: segment.bsx, y: segment.bsy },
+        );
+        if (!best || closest.dist < best.dist) {
+          best = {
+            fn,
+            x: segment.ax + (segment.bx - segment.ax) * closest.t,
+            y: segment.ay + (segment.by - segment.ay) * closest.t,
+            sx: closest.x,
+            sy: closest.y,
+            dist: closest.dist,
+          };
+        }
+      });
+    });
     return best && best.dist <= 26 ? best : null;
-  }, [mouse, functions, worldToScreen, screenToWorld]);
+  }, [mouse, functions, implicitCurves, worldToScreen, screenToWorld]);
 
   const visiblePoint = pointOverlay.snappedPoint && pointOverlay.snappedPoint.key === revealedPointKey
     ? pointOverlay.snappedPoint
@@ -906,7 +1136,7 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
 
     const labelAnchors = [];
     functions.forEach((fn) => {
-      if (!fn.visible || !fn.compiled) return;
+      if (!fn.visible || !fn.compiled || fn.compiled.kind !== 'explicit') return;
       ctx.strokeStyle = fn.color;
       ctx.lineWidth = fn.thickness || 2;
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -917,8 +1147,7 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
       for (let i = 0; i <= samples; i++) {
         const sx = (i / samples) * size.w;
         const [wx] = screenToWorld(sx, 0);
-        let wy;
-        try { wy = fn.compiled(wx); } catch { wy = NaN; }
+        const wy = evaluateExplicitSafe(fn.compiled, wx);
         if (!isFinite(wy)) { prev = null; continue; }
         const [, sy] = worldToScreen(wx, wy);
         if (prev && Math.abs(sy - prev[1]) > size.h * 1.5) prev = null;
@@ -928,6 +1157,19 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
       }
       ctx.stroke();
       if (lastGood && fn.label) labelAnchors.push({ label: fn.label, color: fn.color, sx: lastGood[0], sy: lastGood[1] });
+    });
+    implicitCurves.forEach((fn) => {
+      ctx.strokeStyle = fn.color;
+      ctx.lineWidth = fn.thickness || 2;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      fn.segments.forEach((segment) => {
+        ctx.moveTo(segment.asx, segment.asy);
+        ctx.lineTo(segment.bsx, segment.bsy);
+      });
+      ctx.stroke();
+      if (fn.anchor && fn.label) labelAnchors.push({ label: fn.label, color: fn.color, sx: fn.anchor.sx, sy: fn.anchor.sy });
     });
 
     // Function labels near the right edge of each curve
@@ -1110,7 +1352,7 @@ function PlotCanvas({ functions, view, setView, theme, onTrace, coordMode }) {
         { titleLines: tracker.fn.label ? [tracker.fn.label] : [], color: tracker.fn.color, showCrosshair: false },
       );
     }
-  }, [coordMode, labelFade, pointOverlay, size, theme, view, visiblePoint, curveTracker, showCurveTrace, worldBounds, worldToScreen, screenToWorld, functions]);
+  }, [coordMode, implicitCurves, labelFade, pointOverlay, size, theme, view, visiblePoint, curveTracker, showCurveTrace, worldBounds, worldToScreen, screenToWorld, functions]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -1234,6 +1476,8 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly }) {
   const commit = () => { onChange({ ...fn, expr: draft }); setEditing(false); };
   const hasError = !!fn.error;
   const label = fn.label || 'f';
+  const curveKind = fn.curveKind || inferCurveKindFromExpr(fn.expr);
+  const descriptor = curveKind === 'implicit' ? `${label}(x, y)` : `${label}(x) =`;
 
   return (
     <div style={{
@@ -1265,7 +1509,7 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly }) {
           color: theme.muted, letterSpacing: '0.02em',
           opacity: fn.visible ? 1 : 0.45,
         }}>
-          {label}(x) =
+          {descriptor}
         </div>
         {editing ? (
           <input
@@ -1276,7 +1520,7 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly }) {
               if (e.key === 'Enter') commit();
               if (e.key === 'Escape') { setDraft(fn.expr); setEditing(false); }
             }}
-            placeholder="e.g. sin(x) * x"
+            placeholder="e.g. sin(x) * x  or  x^2 + y^2 = 9"
             aria-label={`Expression for ${label}`}
             style={{
               width: '100%', border: 'none', outline: 'none', background: 'transparent',
@@ -1534,6 +1778,9 @@ function ExpandedSidebarInner({ functions, setFunctions, theme, view, setView, t
           marginTop: 8,
         }}>
           <div style={{ letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Reference</div>
+          <div>y = sin(x) · y = 0.5*x^2 - 2</div>
+          <div>x^2 + y^2 = 9 · y^2 = 4x</div>
+          <div>x^2/9 - y^2/4 = 1</div>
           <div>sin · cos · tan · asin · acos · atan</div>
           <div>exp · ln · log · sqrt · abs · pow</div>
           <div>pi · e · tau · sec · csc · cot</div>
@@ -1808,14 +2055,15 @@ function App() {
   const compiledFunctions = useMemo(() => {
     return functions.map(f => {
       const label = f.label || formatFnLabel(f.labelSeq);
-      if (!f.expr || !f.expr.trim()) return { ...f, label, compiled: null, error: null };
+      const fallbackKind = inferCurveKindFromExpr(f.expr);
+      if (!f.expr || !f.expr.trim()) return { ...f, label, curveKind: fallbackKind, compiled: null, error: null };
       try {
         const compiled = window.LocusMath.compile(f.expr);
-        const probe = compiled(0);
-        // Allow NaN at x=0 (e.g. 1/x) — only surface actual thrown errors.
-        return { ...f, label, compiled, error: null };
+        if (compiled.kind === 'explicit') compiled.evaluate(0);
+        else compiled.evaluate(0, 0);
+        return { ...f, label, curveKind: compiled.kind, compiled, error: null };
       } catch (err) {
-        return { ...f, label, compiled: null, error: humanizeError(err.message) };
+        return { ...f, label, curveKind: fallbackKind, compiled: null, error: humanizeError(err.message) };
       }
     });
   }, [functions]);
@@ -1895,26 +2143,37 @@ function App() {
     if (!visibleFns.length) { setView({ cx: 0, cy: 0, scale: 50 }); return; }
     const canvasW = Math.max(360, window.innerWidth - (collapsed ? RAIL_WIDTH : sidebarWidth));
     const canvasH = Math.max(300, window.innerHeight);
-    const xMin = -10, xMax = 10;
-    let yMin = Infinity, yMax = -Infinity;
+    const bounds = { wxMin: -10, wxMax: 10, wyMin: -10, wyMax: 10 };
+    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
     visibleFns.forEach(fn => {
-      for (let i = 0; i <= 600; i++) {
-        const x = xMin + (xMax - xMin) * (i / 600);
-        try {
-          const y = fn.compiled(x);
-          if (!Number.isFinite(y)) continue;
-          if (Math.abs(y) > 1e8) continue;
+      if (fn.compiled.kind === 'explicit') {
+        for (let i = 0; i <= 600; i++) {
+          const x = bounds.wxMin + (bounds.wxMax - bounds.wxMin) * (i / 600);
+          const y = evaluateExplicitSafe(fn.compiled, x);
+          if (!Number.isFinite(y) || Math.abs(y) > 1e8) continue;
+          if (x < xMin) xMin = x;
+          if (x > xMax) xMax = x;
           if (y < yMin) yMin = y;
           if (y > yMax) yMax = y;
-        } catch {}
+        }
+        return;
       }
+      const segments = sampleImplicitSegments(fn.compiled, bounds, 140, 140);
+      segments.forEach((segment) => {
+        xMin = Math.min(xMin, segment.ax, segment.bx);
+        xMax = Math.max(xMax, segment.ax, segment.bx);
+        yMin = Math.min(yMin, segment.ay, segment.by);
+        yMax = Math.max(yMax, segment.ay, segment.by);
+      });
     });
-    if (!Number.isFinite(yMin) || !Number.isFinite(yMax) || yMin === yMax) {
+    if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || !Number.isFinite(yMin) || !Number.isFinite(yMax)) {
       setView({ cx: 0, cy: 0, scale: 50 });
       return;
     }
+    if (xMin === xMax) { xMin -= 1; xMax += 1; }
+    if (yMin === yMax) { yMin -= 1; yMax += 1; }
     const pad = 1.15;
-    const cx = 0;
+    const cx = (xMin + xMax) / 2;
     const cy = (yMin + yMax) / 2;
     const xRange = (xMax - xMin) * pad;
     const yRange = (yMax - yMin) * pad;
