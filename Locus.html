@@ -526,9 +526,17 @@ function inferCurveKindFromExpr(expr) {
   return compact.includes('=') ? 'implicit' : 'explicit';
 }
 
-function formatFnLabel(seq) {
+function formatIndexedLabel(prefix, seq) {
   const n = Number.isFinite(seq) ? seq + 1 : 1;
-  return 'f' + String(n).split('').map(d => FUNC_SUBSCRIPTS[+d] || d).join('');
+  return prefix + String(n).split('').map(d => FUNC_SUBSCRIPTS[+d] || d).join('');
+}
+
+function formatFnLabel(seq) {
+  return formatIndexedLabel('f', seq);
+}
+
+function formatTangentLabel(seq, ownerLabel) {
+  return `${formatIndexedLabel('t', seq)}(${ownerLabel || 'f'})`;
 }
 
 function renderExpressionPreview(expr) {
@@ -717,8 +725,8 @@ function scanExtrema(fn, xMin, xMax, sampleCount) {
   return extrema;
 }
 
-function computeSpecialPoints(functions, implicitCurves, xMin, xMax, yMin, yMax, scale, width, height) {
-  const visibleExplicit = functions.filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit');
+function computeSpecialPoints(featureFunctions, curves, implicitCurves, xMin, xMax, yMin, yMax, scale, width, height) {
+  const visibleExplicit = curves.filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit');
   const visibleImplicit = implicitCurves || [];
   if (!visibleExplicit.length && !visibleImplicit.length) return [];
   if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || xMax <= xMin) return [];
@@ -727,7 +735,9 @@ function computeSpecialPoints(functions, implicitCurves, xMin, xMax, yMin, yMax,
   const xTol = Math.max((xMax - xMin) / sampleCount * 2, 1e-6);
   const points = [];
 
-  visibleExplicit.forEach((fn) => {
+  featureFunctions
+    .filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit')
+    .forEach((fn) => {
     const zeros = scanRoots(fn.compiled.evaluate, xMin, xMax, sampleCount, yTol);
     zeros.forEach((x) => {
       points.push({
@@ -742,7 +752,7 @@ function computeSpecialPoints(functions, implicitCurves, xMin, xMax, yMin, yMax,
         color: fn.color, fnId: fn.id, label: fn.label,
       });
     });
-  });
+    });
 
   for (let i = 0; i < visibleExplicit.length; i++) {
     for (let j = i + 1; j < visibleExplicit.length; j++) {
@@ -1071,15 +1081,15 @@ function PlotCanvas({
   coordMode,
   selectedFunctionId,
   tangentMode,
-  tangentPoint,
-  onTangentChange,
+  tangentPoints,
+  onTangentPointsChange,
 }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
   const [mouse, setMouse] = useState(null);
   const draggingRef = useRef(null);
-  const tangentDragRef = useRef(false);
+  const tangentDragRef = useRef(null);
   const [labelFade, setLabelFade] = useState(null);
   const [revealedPointKey, setRevealedPointKey] = useState(null);
   const revealTimerRef = useRef(null);
@@ -1129,13 +1139,64 @@ function PlotCanvas({
 
   const implicitGrid = useMemo(() => getImplicitSampleGrid(size.w, size.h), [size.h, size.w]);
 
+  const tangentCurves = useMemo(() => (
+    tangentPoints
+      .map((tangent) => {
+        const owner = functions.find((fn) => fn.id === tangent.fnId);
+        if (!owner || !owner.compiled) return null;
+        const tangentLine = getTangentLine(owner, tangent, view.scale);
+        if (!tangentLine) return null;
+        const label = formatTangentLabel(tangent.seq, owner.label);
+        if (tangentLine.type === 'vertical') {
+          return {
+            id: tangent.id,
+            visible: owner.visible,
+            color: owner.color,
+            thickness: 1.5,
+            label,
+            dash: [8, 6],
+            showLabel: false,
+            source: 'tangent',
+            ownerId: owner.id,
+            tangentId: tangent.id,
+            tangentPoint: tangent,
+            compiled: {
+              kind: 'implicit',
+              evaluate: (x) => x - tangentLine.x,
+            },
+          };
+        }
+        return {
+          id: tangent.id,
+          visible: owner.visible,
+          color: owner.color,
+          thickness: 1.5,
+          label,
+          dash: [8, 6],
+          showLabel: false,
+          source: 'tangent',
+          ownerId: owner.id,
+          tangentId: tangent.id,
+          tangentPoint: tangent,
+          compiled: {
+            kind: 'explicit',
+            evaluate: (x) => tangentLine.y + tangentLine.slope * (x - tangentLine.x),
+          },
+        };
+      })
+      .filter(Boolean)
+  ), [functions, tangentPoints, view.scale]);
+
+  const curveEntities = useMemo(() => [...functions, ...tangentCurves], [functions, tangentCurves]);
+
   const implicitCurveSamples = useMemo(() => (
-    sampleVisibleImplicitCurves(functions, worldBounds, implicitGrid.cols, implicitGrid.rows)
-  ), [functions, implicitGrid.cols, implicitGrid.rows, worldBounds]);
+    sampleVisibleImplicitCurves(curveEntities, worldBounds, implicitGrid.cols, implicitGrid.rows)
+  ), [curveEntities, implicitGrid.cols, implicitGrid.rows, worldBounds]);
 
   const specialPoints = useMemo(() => (
     computeSpecialPoints(
       functions,
+      curveEntities,
       implicitCurveSamples,
       worldBounds.wxMin,
       worldBounds.wxMax,
@@ -1145,7 +1206,7 @@ function PlotCanvas({
       size.w,
       size.h,
     )
-  ), [functions, implicitCurveSamples, worldBounds, view.scale, size.h, size.w]);
+  ), [curveEntities, functions, implicitCurveSamples, worldBounds, view.scale, size.h, size.w]);
 
   const pointOverlay = useMemo(() => {
     const screenPoints = specialPoints
@@ -1203,25 +1264,23 @@ function PlotCanvas({
     () => functions.find((fn) => fn.id === selectedFunctionId) || null,
     [functions, selectedFunctionId],
   );
-  const selectedImplicitCurve = useMemo(
-    () => implicitCurves.find((fn) => fn.id === selectedFunctionId) || null,
-    [implicitCurves, selectedFunctionId],
-  );
 
-  const findPointOnSelectedCurve = useCallback((screenPoint, allowLoose = false) => {
-    if (!selectedFunction || !selectedFunction.visible || !selectedFunction.compiled) return null;
-    if (selectedFunction.compiled.kind === 'explicit') {
+  const findPointOnFunction = useCallback((screenPoint, functionId, allowLoose = false) => {
+    const targetFunction = functions.find((fn) => fn.id === functionId);
+    if (!targetFunction || !targetFunction.visible || !targetFunction.compiled) return null;
+    if (targetFunction.compiled.kind === 'explicit') {
       const [wx] = screenToWorld(screenPoint.x, screenPoint.y);
-      const y = evaluateExplicitSafe(selectedFunction.compiled, wx);
+      const y = evaluateExplicitSafe(targetFunction.compiled, wx);
       if (!Number.isFinite(y)) return null;
       const [sx, sy] = worldToScreen(wx, y);
       const dist = Math.hypot(sx - screenPoint.x, sy - screenPoint.y);
       if (!allowLoose && dist > 18) return null;
       return { x: wx, y, sx, sy, dist };
     }
-    if (!selectedImplicitCurve) return null;
+    const targetImplicitCurve = implicitCurves.find((fn) => fn.id === functionId);
+    if (!targetImplicitCurve) return null;
     let best = null;
-    selectedImplicitCurve.segments.forEach((segment) => {
+    targetImplicitCurve.segments.forEach((segment) => {
       const closest = closestPointOnSegment(
         screenPoint,
         { x: segment.asx, y: segment.asy },
@@ -1239,24 +1298,24 @@ function PlotCanvas({
     });
     if (!allowLoose && best && best.dist > 18) return null;
     return best;
-  }, [screenToWorld, selectedFunction, selectedImplicitCurve, worldToScreen]);
+  }, [functions, implicitCurves, screenToWorld, worldToScreen]);
 
-  const tangentScreenPoint = useMemo(() => {
-    if (!tangentPoint || tangentPoint.fnId !== selectedFunctionId) return null;
-    const [sx, sy] = worldToScreen(tangentPoint.x, tangentPoint.y);
-    return { ...tangentPoint, sx, sy };
-  }, [selectedFunctionId, tangentPoint, worldToScreen]);
-
-  const tangentLine = useMemo(() => {
-    if (!selectedFunction || !tangentPoint || tangentPoint.fnId !== selectedFunction.id) return null;
-    return getTangentLine(selectedFunction, tangentPoint, view.scale);
-  }, [selectedFunction, tangentPoint, view.scale]);
+  const tangentHandles = useMemo(() => (
+    tangentPoints
+      .map((tangent) => {
+        const owner = functions.find((fn) => fn.id === tangent.fnId);
+        if (!owner || !owner.visible) return null;
+        const [sx, sy] = worldToScreen(tangent.x, tangent.y);
+        return { ...tangent, color: owner.color, ownerLabel: owner.label, sx, sy };
+      })
+      .filter((handle) => handle && handle.sx >= -20 && handle.sx <= size.w + 20 && handle.sy >= -20 && handle.sy <= size.h + 20)
+  ), [functions, size.h, size.w, tangentPoints, worldToScreen]);
 
   const curveTracker = useMemo(() => {
     if (!mouse) return null;
     const [wx] = screenToWorld(mouse.x, mouse.y);
     let best = null;
-    functions.forEach((fn) => {
+    curveEntities.forEach((fn) => {
       if (!fn.visible || !fn.compiled || fn.compiled.kind !== 'explicit') return;
       const y = evaluateExplicitSafe(fn.compiled, wx);
       if (!Number.isFinite(y)) return;
@@ -1284,7 +1343,7 @@ function PlotCanvas({
       });
     });
     return best && best.dist <= 26 ? best : null;
-  }, [mouse, functions, implicitCurves, worldToScreen, screenToWorld]);
+  }, [mouse, curveEntities, implicitCurves, worldToScreen, screenToWorld]);
 
   const visiblePoint = pointOverlay.snappedPoint && pointOverlay.snappedPoint.key === revealedPointKey
     ? pointOverlay.snappedPoint
@@ -1414,11 +1473,12 @@ function PlotCanvas({
     }
 
     const labelAnchors = [];
-    functions.forEach((fn) => {
+    curveEntities.forEach((fn) => {
       if (!fn.visible || !fn.compiled || fn.compiled.kind !== 'explicit') return;
       ctx.strokeStyle = fn.color;
       ctx.lineWidth = fn.thickness || 2;
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.setLineDash(fn.dash || []);
       ctx.beginPath();
       const samples = size.w * 2;
       let prev = null;
@@ -1435,55 +1495,41 @@ function PlotCanvas({
         if (sy >= 0 && sy <= size.h) lastGood = [sx, sy];
       }
       ctx.stroke();
-      if (lastGood && fn.label) labelAnchors.push({ label: fn.label, color: fn.color, sx: lastGood[0], sy: lastGood[1] });
+      ctx.setLineDash([]);
+      if (lastGood && fn.label && fn.showLabel !== false) labelAnchors.push({ label: fn.label, color: fn.color, sx: lastGood[0], sy: lastGood[1] });
     });
     implicitCurves.forEach((fn) => {
       ctx.strokeStyle = fn.color;
       ctx.lineWidth = fn.thickness || 2;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
+      ctx.setLineDash(fn.dash || []);
       ctx.beginPath();
       fn.segments.forEach((segment) => {
         ctx.moveTo(segment.asx, segment.asy);
         ctx.lineTo(segment.bsx, segment.bsy);
       });
       ctx.stroke();
-      if (fn.anchor && fn.label) labelAnchors.push({ label: fn.label, color: fn.color, sx: fn.anchor.sx, sy: fn.anchor.sy });
+      ctx.setLineDash([]);
+      if (fn.anchor && fn.label && fn.showLabel !== false) labelAnchors.push({ label: fn.label, color: fn.color, sx: fn.anchor.sx, sy: fn.anchor.sy });
     });
 
-    if (tangentLine && tangentScreenPoint) {
+    tangentHandles.forEach((handle) => {
+      const isSelectedOwner = handle.fnId === selectedFunctionId;
       ctx.save();
-      ctx.strokeStyle = selectedFunction?.color || theme.ink;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([8, 6]);
-      ctx.beginPath();
-      if (tangentLine.type === 'vertical') {
-        const [sx] = worldToScreen(tangentLine.x, tangentLine.y);
-        ctx.moveTo(sx, 0);
-        ctx.lineTo(sx, size.h);
-      } else {
-        const leftY = tangentLine.y + tangentLine.slope * (worldBounds.wxMin - tangentLine.x);
-        const rightY = tangentLine.y + tangentLine.slope * (worldBounds.wxMax - tangentLine.x);
-        const [lsx, lsy] = worldToScreen(worldBounds.wxMin, leftY);
-        const [rsx, rsy] = worldToScreen(worldBounds.wxMax, rightY);
-        ctx.moveTo(lsx, lsy);
-        ctx.lineTo(rsx, rsy);
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
       ctx.fillStyle = theme.panel;
-      ctx.strokeStyle = selectedFunction?.color || theme.ink;
-      ctx.lineWidth = tangentMode ? 2.5 : 2;
+      ctx.strokeStyle = handle.color;
+      ctx.lineWidth = tangentMode && isSelectedOwner ? 2.5 : 2;
       ctx.beginPath();
-      ctx.arc(tangentScreenPoint.sx, tangentScreenPoint.sy, tangentMode ? 6 : 5, 0, Math.PI * 2);
+      ctx.arc(handle.sx, handle.sy, tangentMode && isSelectedOwner ? 6 : 5, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
-      ctx.fillStyle = selectedFunction?.color || theme.ink;
+      ctx.fillStyle = handle.color;
       ctx.beginPath();
-      ctx.arc(tangentScreenPoint.sx, tangentScreenPoint.sy, 2.2, 0, Math.PI * 2);
+      ctx.arc(handle.sx, handle.sy, 2.2, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
-    }
+    });
 
     // Function labels near the right edge of each curve
     if (labelAnchors.length) {
@@ -1668,17 +1714,16 @@ function PlotCanvas({
   }, [
     coordMode,
     curveTracker,
-    functions,
+    curveEntities,
     implicitCurves,
     labelFade,
     pointOverlay,
     screenToWorld,
-    selectedFunction,
+    selectedFunctionId,
     showCurveTrace,
     size,
-    tangentLine,
+    tangentHandles,
     tangentMode,
-    tangentScreenPoint,
     theme,
     view,
     visiblePoint,
@@ -1694,16 +1739,28 @@ function PlotCanvas({
     const rect = canvasRef.current.getBoundingClientRect();
     const nextMouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     if (tangentMode && selectedFunction) {
-      const handleDist = tangentScreenPoint ? Math.hypot(nextMouse.x - tangentScreenPoint.sx, nextMouse.y - tangentScreenPoint.sy) : Infinity;
-      if (handleDist <= 12) {
-        tangentDragRef.current = true;
+      const handle = tangentHandles
+        .filter((item) => item.fnId === selectedFunction.id)
+        .reduce((best, item) => {
+          const dist = Math.hypot(nextMouse.x - item.sx, nextMouse.y - item.sy);
+          return !best || dist < best.dist ? { item, dist } : best;
+        }, null);
+      if (handle && handle.dist <= 12) {
+        tangentDragRef.current = { id: handle.item.id, fnId: handle.item.fnId };
         setMouse(nextMouse);
         return;
       }
-      const curvePoint = findPointOnSelectedCurve(nextMouse);
+      const curvePoint = findPointOnFunction(nextMouse, selectedFunction.id);
       if (curvePoint) {
-        tangentDragRef.current = true;
-        onTangentChange({ fnId: selectedFunction.id, x: curvePoint.x, y: curvePoint.y });
+        const nextTangent = {
+          id: Math.random().toString(36).slice(2, 9),
+          fnId: selectedFunction.id,
+          x: curvePoint.x,
+          y: curvePoint.y,
+          seq: tangentPoints.reduce((maxSeq, tangent) => Math.max(maxSeq, tangent.seq ?? -1), -1) + 1,
+        };
+        tangentDragRef.current = { id: nextTangent.id, fnId: selectedFunction.id };
+        onTangentPointsChange((prev) => [...prev, nextTangent]);
         setMouse(nextMouse);
         return;
       }
@@ -1714,9 +1771,15 @@ function PlotCanvas({
   const onMouseMove = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
     const nextMouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    if (tangentDragRef.current && tangentMode && selectedFunction) {
-      const curvePoint = findPointOnSelectedCurve(nextMouse, true);
-      if (curvePoint) onTangentChange({ fnId: selectedFunction.id, x: curvePoint.x, y: curvePoint.y });
+    if (tangentDragRef.current && tangentMode) {
+      const curvePoint = findPointOnFunction(nextMouse, tangentDragRef.current.fnId, true);
+      if (curvePoint) {
+        onTangentPointsChange((prev) => prev.map((tangent) => (
+          tangent.id === tangentDragRef.current.id
+            ? { ...tangent, x: curvePoint.x, y: curvePoint.y }
+            : tangent
+        )));
+      }
       setMouse(nextMouse);
       return;
     }
@@ -1733,8 +1796,8 @@ function PlotCanvas({
     }
     setMouse(nextMouse);
   };
-  const onMouseUp = () => { draggingRef.current = null; tangentDragRef.current = false; };
-  const onMouseLeave = () => { draggingRef.current = null; tangentDragRef.current = false; setMouse(null); };
+  const onMouseUp = () => { draggingRef.current = null; tangentDragRef.current = null; };
+  const onMouseLeave = () => { draggingRef.current = null; tangentDragRef.current = null; setMouse(null); };
   const onWheel = (e) => {
     e.preventDefault();
     const rect = canvasRef.current.getBoundingClientRect();
@@ -2411,7 +2474,16 @@ function App() {
 
   const [selectedFunctionId, setSelectedFunctionId] = useState(null);
   const [tangentMode, setTangentMode] = useState(false);
-  const [tangentPoint, setTangentPoint] = useState(null);
+  const [tangentPoints, setTangentPoints] = useState(() => {
+    try {
+      const s = localStorage.getItem('locus:tangentPoints');
+      if (s) {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) return parsed.filter((item) => item && item.id && item.fnId && Number.isFinite(item.x) && Number.isFinite(item.y));
+      }
+    } catch {}
+    return [];
+  });
   const [traceInfo, setTraceInfo] = useState(null);
   const [showTweaks, setShowTweaks] = useState(false);
   const [tweaksOpen, setTweaksOpen] = useState(false);
@@ -2432,6 +2504,7 @@ function App() {
   useEffect(() => { try { localStorage.setItem('locus:theme', themeKey); } catch {} }, [themeKey]);
   useEffect(() => { try { localStorage.setItem('locus:coordMode', coordMode); } catch {} }, [coordMode]);
   useEffect(() => { try { localStorage.setItem('locus:functions', JSON.stringify(functions)); } catch {} }, [functions]);
+  useEffect(() => { try { localStorage.setItem('locus:tangentPoints', JSON.stringify(tangentPoints)); } catch {} }, [tangentPoints]);
   useEffect(() => { try { localStorage.setItem('locus:view', JSON.stringify(view)); } catch {} }, [view]);
   useEffect(() => { try { localStorage.setItem('locus:sidebarWidth', String(sidebarWidth)); } catch {} }, [sidebarWidth]);
   useEffect(() => { try { localStorage.setItem('locus:collapsed', collapsed ? '1' : '0'); } catch {} }, [collapsed]);
@@ -2478,18 +2551,24 @@ function App() {
   }, [compiledFunctions, selectedFunctionId]);
 
   useEffect(() => {
-    if (!tangentPoint) return;
-    const fn = compiledFunctions.find((item) => item.id === tangentPoint.fnId);
-    if (!fn || !fn.compiled || !fn.visible) {
-      setTangentPoint(null);
-      return;
-    }
-    if (fn.compiled.kind === 'explicit') {
-      const y = evaluateExplicitSafe(fn.compiled, tangentPoint.x);
-      if (!Number.isFinite(y)) setTangentPoint(null);
-      else if (Math.abs(y - tangentPoint.y) > 1e-6) setTangentPoint((prev) => prev ? { ...prev, y } : prev);
-    }
-  }, [compiledFunctions, tangentPoint]);
+    setTangentPoints((prev) => {
+      const next = prev
+        .map((tangent) => {
+          const fn = compiledFunctions.find((item) => item.id === tangent.fnId);
+          if (!fn || !fn.compiled) return null;
+          if (fn.compiled.kind !== 'explicit') return tangent;
+          const y = evaluateExplicitSafe(fn.compiled, tangent.x);
+          if (!Number.isFinite(y)) return null;
+          return Math.abs(y - tangent.y) > 1e-6 ? { ...tangent, y } : tangent;
+        })
+        .filter(Boolean);
+      if (next.length !== prev.length) return next;
+      for (let i = 0; i < next.length; i++) {
+        if (next[i] !== prev[i]) return next;
+      }
+      return prev;
+    });
+  }, [compiledFunctions]);
 
   const prevThemeRef = useRef(themeKey);
   useEffect(() => {
@@ -2630,6 +2709,8 @@ function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [fitView]);
 
+  const selectedTangentCount = tangentPoints.filter((tangent) => tangent.fnId === selectedFunctionId).length;
+
   return (
     <div style={{ display: 'flex', width: '100%', height: '100%', background: theme.bg }}>
       <SidebarShell
@@ -2664,8 +2745,8 @@ function App() {
           coordMode={coordMode}
           selectedFunctionId={selectedFunctionId}
           tangentMode={tangentMode}
-          tangentPoint={tangentPoint}
-          onTangentChange={setTangentPoint}
+          tangentPoints={tangentPoints}
+          onTangentPointsChange={setTangentPoints}
         />
         <div style={{ position: 'absolute', top: 16, right: 16, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           <div className="coord-mode-switch" style={{ color: theme.muted, background: theme.panel, borderColor: theme.rule }}>
@@ -2692,11 +2773,11 @@ function App() {
               aria-label="Toggle tangent mode"
               style={{ color: selectedFunctionId ? (tangentMode ? theme.ink : theme.muted) : theme.ruleStrong, background: tangentMode ? theme.chip : 'transparent' }}
             >Tangent</button>
-            {tangentPoint && (
+            {selectedTangentCount > 0 && (
               <button
-                onClick={() => setTangentPoint(null)}
-                title="Clear tangent"
-                aria-label="Clear tangent"
+                onClick={() => setTangentPoints((prev) => prev.filter((tangent) => tangent.fnId !== selectedFunctionId))}
+                title="Clear selected tangents"
+                aria-label="Clear selected tangents"
                 style={{ color: theme.muted }}
               >Clear</button>
             )}
