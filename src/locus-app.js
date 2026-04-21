@@ -27,25 +27,63 @@
     { expr: "0.5 * x^2 - 2" },
     { expr: "cos(x) * e^(-0.1 * x^2)" }
   ];
+  function restoreFunctions(entries) {
+    if (!Array.isArray(entries) || !entries.length) return null;
+    const used = new Set(entries.map((fn) => fn.labelSeq).filter((n) => Number.isFinite(n)));
+    let next = 0;
+    return entries.map((fn) => {
+      if (Number.isFinite(fn.labelSeq)) return { ...fn, label: formatFnLabel(fn.labelSeq) };
+      while (used.has(next)) next++;
+      const labelSeq = next++;
+      used.add(labelSeq);
+      return { ...fn, labelSeq, label: formatFnLabel(labelSeq) };
+    });
+  }
+  function createDefaultFunctions(themeKey) {
+    const palette = (window.LOCUS_THEMES[themeKey] || window.LOCUS_THEMES.linen).funcPalette;
+    return DEFAULT_FUNCTIONS.map((fn, index) => ({
+      id: Math.random().toString(36).slice(2, 9),
+      expr: fn.expr,
+      visible: true,
+      color: palette[index % palette.length],
+      thickness: 2,
+      labelSeq: index,
+      label: formatFnLabel(index)
+    }));
+  }
+  function clampSidebarWidth(value) {
+    const width = Number(value);
+    return Math.max(260, Math.min(600, Number.isFinite(width) ? width : 340));
+  }
+  function useStoredState(key, initializer, serialize = (value) => value) {
+    const [state, setState] = useState(initializer);
+    useEffect(() => {
+      try {
+        localStorage.setItem(key, serialize(state));
+      } catch {
+      }
+    }, [key, state]);
+    return [state, setState];
+  }
   function App() {
-    const [themeKey, setThemeKey] = useState(() => {
+    const [themeKey, setThemeKey] = useStoredState("locus:theme", () => {
       try {
         const stored = localStorage.getItem("locus:theme");
         if (stored && window.LOCUS_THEMES[stored]) return stored;
       } catch {
       }
       return TWEAK_DEFAULTS.theme;
-    });
+    }, String);
     const theme = window.LOCUS_THEMES[themeKey] || window.LOCUS_THEMES.linen;
-    const [coordMode, setCoordMode] = useState(() => {
+    const [coordMode, setCoordMode] = useStoredState("locus:coordMode", () => {
       try {
         const stored = localStorage.getItem("locus:coordMode");
         if (stored === COORD_MODES.exact || stored === COORD_MODES.decimal) return stored;
       } catch {
       }
       return COORD_MODES.exact;
-    });
-    const [parameterConfig, setParameterConfig] = useState(() => {
+    }, String);
+    const [parameterConfig, setParameterConfig] = useStoredState("locus:parameters", () => {
       try {
         const stored = localStorage.getItem("locus:parameters");
         if (stored) {
@@ -55,126 +93,56 @@
       } catch {
       }
       return {};
-    });
-    const [functions, setFunctions] = useState(() => {
+    }, JSON.stringify);
+    const [functions, setFunctions] = useStoredState("locus:functions", () => {
       try {
-        const s = localStorage.getItem("locus:functions");
-        if (s) {
-          const parsed = JSON.parse(s);
-          if (Array.isArray(parsed) && parsed.length) {
-            const used = new Set(parsed.map((f) => f.labelSeq).filter((n) => Number.isFinite(n)));
-            let next = 0;
-            return parsed.map((f) => {
-              if (Number.isFinite(f.labelSeq)) return { ...f, label: formatFnLabel(f.labelSeq) };
-              while (used.has(next)) next++;
-              const seq = next++;
-              used.add(seq);
-              return { ...f, labelSeq: seq, label: formatFnLabel(seq) };
-            });
-          }
-        }
+        const stored = localStorage.getItem("locus:functions");
+        const restored = stored ? restoreFunctions(JSON.parse(stored)) : null;
+        if (restored) return restored;
       } catch {
       }
-      const palette = window.LOCUS_THEMES[TWEAK_DEFAULTS.theme].funcPalette;
-      return DEFAULT_FUNCTIONS.map((f, i) => ({
-        id: Math.random().toString(36).slice(2, 9),
-        expr: f.expr,
-        visible: true,
-        color: palette[i % palette.length],
-        thickness: 2,
-        labelSeq: i,
-        label: formatFnLabel(i)
-      }));
-    });
-    const [view, setView] = useState(() => {
+      return createDefaultFunctions(TWEAK_DEFAULTS.theme);
+    }, JSON.stringify);
+    const [view, setView] = useStoredState("locus:view", () => {
       try {
-        const s = localStorage.getItem("locus:view");
-        if (s) return sanitizeView(JSON.parse(s));
+        const stored = localStorage.getItem("locus:view");
+        if (stored) return sanitizeView(JSON.parse(stored));
       } catch {
       }
       return DEFAULT_VIEW;
-    });
+    }, JSON.stringify);
     const [selectedFunctionId, setSelectedFunctionId] = useState(null);
     const [tangentMode, setTangentMode] = useState(false);
-    const [tangentPoints, setTangentPoints] = useState(() => {
+    const [tangentPoints, setTangentPoints] = useStoredState("locus:tangentPoints", () => {
       try {
-        const s = localStorage.getItem("locus:tangentPoints");
-        if (s) {
-          const parsed = JSON.parse(s);
+        const stored = localStorage.getItem("locus:tangentPoints");
+        if (stored) {
+          const parsed = JSON.parse(stored);
           if (Array.isArray(parsed)) return parsed.filter((item) => item && item.id && item.fnId && Number.isFinite(item.x) && Number.isFinite(item.y));
         }
       } catch {
       }
       return [];
-    });
+    }, JSON.stringify);
     const [traceInfo, setTraceInfo] = useState(null);
     const [showTweaks, setShowTweaks] = useState(false);
     const [tweaksOpen, setTweaksOpen] = useState(false);
     const tweaksRef = useRef(null);
-    const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const [sidebarWidth, setSidebarWidth] = useStoredState("locus:sidebarWidth", () => {
       try {
-        const s = localStorage.getItem("locus:sidebarWidth");
-        if (s) return Math.max(260, Math.min(600, parseInt(s, 10) || 340));
+        return clampSidebarWidth(localStorage.getItem("locus:sidebarWidth"));
       } catch {
       }
       return 340;
-    });
-    const [collapsed, setCollapsed] = useState(() => {
+    }, String);
+    const [collapsed, setCollapsed] = useStoredState("locus:collapsed", () => {
       try {
         return localStorage.getItem("locus:collapsed") === "1";
       } catch {
         return false;
       }
-    });
+    }, (value) => value ? "1" : "0");
     const [resizing, setResizing] = useState(false);
-    useEffect(() => {
-      try {
-        localStorage.setItem("locus:theme", themeKey);
-      } catch {
-      }
-    }, [themeKey]);
-    useEffect(() => {
-      try {
-        localStorage.setItem("locus:coordMode", coordMode);
-      } catch {
-      }
-    }, [coordMode]);
-    useEffect(() => {
-      try {
-        localStorage.setItem("locus:parameters", JSON.stringify(parameterConfig));
-      } catch {
-      }
-    }, [parameterConfig]);
-    useEffect(() => {
-      try {
-        localStorage.setItem("locus:functions", JSON.stringify(functions));
-      } catch {
-      }
-    }, [functions]);
-    useEffect(() => {
-      try {
-        localStorage.setItem("locus:tangentPoints", JSON.stringify(tangentPoints));
-      } catch {
-      }
-    }, [tangentPoints]);
-    useEffect(() => {
-      try {
-        localStorage.setItem("locus:view", JSON.stringify(view));
-      } catch {
-      }
-    }, [view]);
-    useEffect(() => {
-      try {
-        localStorage.setItem("locus:sidebarWidth", String(sidebarWidth));
-      } catch {
-      }
-    }, [sidebarWidth]);
-    useEffect(() => {
-      try {
-        localStorage.setItem("locus:collapsed", collapsed ? "1" : "0");
-      } catch {
-      }
-    }, [collapsed]);
     const onResizeStart = (e) => {
       e.preventDefault();
       const startX = e.clientX;
@@ -182,8 +150,7 @@
       setResizing(true);
       document.body.classList.add("resizing");
       const onMove = (ev) => {
-        const w = Math.max(260, Math.min(600, startW + (ev.clientX - startX)));
-        setSidebarWidth(w);
+        setSidebarWidth(clampSidebarWidth(startW + (ev.clientX - startX)));
       };
       const onUp = () => {
         setResizing(false);

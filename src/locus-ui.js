@@ -18,7 +18,6 @@
     formatFnLabel,
     formatTangentLabel,
     evaluateExplicitSafe,
-    evaluateCurvePointSafe,
     buildVisiblePolylineCurves,
     computeSpecialPoints,
     getImplicitSampleGrid,
