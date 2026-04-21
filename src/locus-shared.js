@@ -486,6 +486,105 @@
     return points;
   }
 
+  function intersectExplicitAndImplicit(explicitCurve, implicitCurve, xMin, xMax, sampleCount, yTol, params = {}) {
+    const explicitRange = getCurveAxisRange(explicitCurve.compiled, 'x', xMin, xMax, params);
+    const implicitRange = getCurveAxisRange(implicitCurve.compiled, 'x', xMin, xMax, params);
+    const overlapMin = Math.max(explicitRange.min, implicitRange.min);
+    const overlapMax = Math.min(explicitRange.max, implicitRange.max);
+    if (!(overlapMax > overlapMin)) return [];
+
+    const implicitYRange = getResolvedRanges(implicitCurve.compiled, params).y;
+    const diff = (x) => {
+      const y = evaluateExplicitSafe(explicitCurve.compiled, x, params);
+      if (!Number.isFinite(y)) return NaN;
+      if (implicitYRange && (y < implicitYRange.min || y > implicitYRange.max)) return NaN;
+      return evaluateImplicitSafe(implicitCurve.compiled, x, y, params);
+    };
+
+    return scanRoots(diff, overlapMin, overlapMax, sampleCount, yTol).map((x) => {
+      const y = evaluateExplicitSafe(explicitCurve.compiled, x, params);
+      return Number.isFinite(y) ? {
+        type: 'intersection',
+        x,
+        y,
+        color: explicitCurve.color,
+        color2: implicitCurve.color,
+        fnId: explicitCurve.id,
+        fn2Id: implicitCurve.id,
+        label: explicitCurve.label,
+        label2: implicitCurve.label,
+      } : null;
+    }).filter(Boolean);
+  }
+
+  function curveResidualAtPoint(curve, x, y, params = {}) {
+    const compiled = curve?.compiled;
+    if (!compiled) return NaN;
+    if (compiled.kind === 'explicit') {
+      const expectedY = evaluateExplicitSafe(compiled, x, params);
+      return Number.isFinite(expectedY) ? Math.abs(expectedY - y) : NaN;
+    }
+    if (compiled.kind === 'implicit') {
+      const value = evaluateImplicitSafe(compiled, x, y, params);
+      return Number.isFinite(value) ? Math.abs(value) : NaN;
+    }
+    return NaN;
+  }
+
+  function mergeIntersectionPoints(points, xTol, yTol, curvesById, params = {}) {
+    const clusters = [];
+    const sorted = [...points].sort((a, b) => {
+      const pairA = [a.fnId, a.fn2Id].filter(Boolean).sort().join('|');
+      const pairB = [b.fnId, b.fn2Id].filter(Boolean).sort().join('|');
+      return pairA.localeCompare(pairB) || a.x - b.x || a.y - b.y;
+    });
+
+    sorted.forEach((point) => {
+      const pairKey = [point.fnId, point.fn2Id].filter(Boolean).sort().join('|');
+      const last = clusters[clusters.length - 1];
+      if (
+        last &&
+        last.pairKey === pairKey &&
+        Math.abs(last.centerX - point.x) <= xTol &&
+        Math.abs(last.centerY - point.y) <= yTol
+      ) {
+        last.points.push(point);
+        const count = last.points.length;
+        last.centerX += (point.x - last.centerX) / count;
+        last.centerY += (point.y - last.centerY) / count;
+        return;
+      }
+      clusters.push({ pairKey, centerX: point.x, centerY: point.y, points: [point] });
+    });
+
+    return clusters.map((cluster) => {
+      let bestPoint = cluster.points[0];
+      let bestScore = NaN;
+      let hasScoredPoint = false;
+      cluster.points.forEach((point) => {
+        let scored = false;
+        const score = [point.fnId, point.fn2Id].reduce((sum, id) => {
+          const residual = curveResidualAtPoint(curvesById.get(id), point.x, point.y, params);
+          if (!Number.isFinite(residual)) return sum;
+          scored = true;
+          return sum + residual;
+        }, 0);
+        if (!scored) return;
+        if (!hasScoredPoint || score < bestScore) {
+          bestPoint = point;
+          bestScore = score;
+          hasScoredPoint = true;
+        }
+      });
+      if (hasScoredPoint) return bestPoint;
+      return {
+        ...bestPoint,
+        x: cluster.centerX,
+        y: cluster.centerY,
+      };
+    });
+  }
+
   function computeSpecialPoints(featureFunctions, curves, polylineCurves, implicitCurves, xMin, xMax, yMin, yMax, scaleX, scaleY, width, height, params = {}) {
     const visibleExplicit = curves.filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit');
     const sampledCurves = polylineCurves || [];
@@ -560,6 +659,20 @@
       }
     }
 
+    visibleExplicit.forEach((explicitCurve) => {
+      visibleImplicit.forEach((implicitCurve) => {
+        points.push(...intersectExplicitAndImplicit(
+          explicitCurve,
+          implicitCurve,
+          xMin,
+          xMax,
+          sampleCount,
+          yTol,
+          params,
+        ));
+      });
+    });
+
     points.push(...intersectImplicitCurves(
       visibleImplicit,
       xTol,
@@ -572,15 +685,30 @@
       for (let j = i + 1; j < genericCurves.length; j++) {
         if (genericCurves[i].compiled.kind === 'explicit' && genericCurves[j].compiled.kind === 'explicit') continue;
         if (genericCurves[i].compiled.kind === 'implicit' && genericCurves[j].compiled.kind === 'implicit') continue;
+        if (
+          (genericCurves[i].compiled.kind === 'explicit' && genericCurves[j].compiled.kind === 'implicit') ||
+          (genericCurves[i].compiled.kind === 'implicit' && genericCurves[j].compiled.kind === 'explicit')
+        ) continue;
         points.push(...intersectSegmentCollections(genericCurves[i], genericCurves[j], xTol, yTol));
       }
     }
 
-    return dedupePoints(
-      points.filter(point => point.y >= yMin - yTol * 4 && point.y <= yMax + yTol * 4),
+    const visiblePoints = points.filter(point => point.y >= yMin - yTol * 4 && point.y <= yMax + yTol * 4);
+    const otherPoints = dedupePoints(
+      visiblePoints.filter(point => point.type !== 'intersection'),
       xTol,
       yTol * 3,
     );
+    const curvesById = new Map([...sampledCurves, ...visibleImplicit].map(curve => [curve.id, curve]));
+    const intersections = mergeIntersectionPoints(
+      visiblePoints.filter(point => point.type === 'intersection'),
+      Math.max(xTol, 4 / Math.max(scaleX, 1)),
+      Math.max(yTol * 3, 4 / Math.max(scaleY, 1)),
+      curvesById,
+      params,
+    );
+
+    return [...otherPoints, ...intersections].sort((a, b) => a.x - b.x || a.y - b.y);
   }
 
   function interpolateIsoPoint(a, b, fa, fb) {
