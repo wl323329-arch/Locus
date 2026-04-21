@@ -97,6 +97,85 @@
   const ChevronLeft = () => /* @__PURE__ */ React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("path", { d: "M7.5 2.5L4 6l3.5 3.5" }));
   const ChevronRight = () => /* @__PURE__ */ React.createElement("svg", { width: "12", height: "12", viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.6", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ React.createElement("path", { d: "M4.5 2.5L8 6l-3.5 3.5" }));
   const LocusMark = ({ color }) => /* @__PURE__ */ React.createElement("svg", { width: "22", height: "22", viewBox: "0 0 22 22", fill: "none", stroke: color, strokeWidth: "1.3", strokeLinecap: "round" }, /* @__PURE__ */ React.createElement("circle", { cx: "15", cy: "15", r: "1.5", fill: color, stroke: "none" }), /* @__PURE__ */ React.createElement("path", { d: "M3 15a12 12 0 0112-12" }), /* @__PURE__ */ React.createElement("path", { d: "M6 15a9 9 0 019-9" }), /* @__PURE__ */ React.createElement("path", { d: "M9 15a6 6 0 016-6" }));
+
+  function useCanvasSize(wrapRef) {
+    const [size, setSize] = useState({ w: 800, h: 600 });
+    useEffect(() => {
+      if (!wrapRef.current) return;
+      const ro = new ResizeObserver(() => {
+        const r = wrapRef.current.getBoundingClientRect();
+        setSize({ w: Math.floor(r.width), h: Math.floor(r.height) });
+      });
+      ro.observe(wrapRef.current);
+      return () => ro.disconnect();
+    }, [wrapRef]);
+    return size;
+  }
+
+  function usePanAndPinch({ setView, size }) {
+    const draggingRef = useRef(null);
+    const pinchRef = useRef(null);
+    const zoomAroundPoint = useCallback((baseView, screenX, screenY, factorX, factorY) => {
+      const sourceView = sanitizeView(baseView);
+      const wxBefore = sourceView.cx + (screenX - size.w / 2) / sourceView.scaleX;
+      const wyBefore = sourceView.cy - (screenY - size.h / 2) / sourceView.scaleY;
+      const scaleX = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, sourceView.scaleX * factorX));
+      const scaleY = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, sourceView.scaleY * factorY));
+      setView({
+        cx: wxBefore - (screenX - size.w / 2) / scaleX,
+        cy: wyBefore + (screenY - size.h / 2) / scaleY,
+        scaleX,
+        scaleY
+      });
+    }, [setView, size.h, size.w]);
+    return { draggingRef, pinchRef, zoomAroundPoint };
+  }
+
+  function useTangentDrag({ selectedFunction, tangentMode, tangentHandles, tangentPoints, findPointOnFunction, onTangentPointsChange }) {
+    const tangentDragRef = useRef(null);
+    const tryStart = (localPoint) => {
+      if (!tangentMode || !selectedFunction) return false;
+      const handle = tangentHandles
+        .filter((item) => item.fnId === selectedFunction.id)
+        .reduce((best, item) => {
+          const dist = Math.hypot(localPoint.x - item.sx, localPoint.y - item.sy);
+          return !best || dist < best.dist ? { item, dist } : best;
+        }, null);
+      if (handle && handle.dist <= 14) {
+        tangentDragRef.current = { id: handle.item.id, fnId: selectedFunction.id };
+        return true;
+      }
+      const curvePoint = findPointOnFunction(localPoint, selectedFunction.id);
+      if (!curvePoint) return false;
+      const seq = tangentPoints.filter((point) => point.fnId === selectedFunction.id).length;
+      const nextTangent = {
+        id: Math.random().toString(36).slice(2, 9),
+        fnId: selectedFunction.id,
+        seq,
+        x: curvePoint.x,
+        y: curvePoint.y,
+        parameterValue: curvePoint.parameterValue
+      };
+      tangentDragRef.current = { id: nextTangent.id, fnId: selectedFunction.id };
+      onTangentPointsChange((prev) => [...prev, nextTangent]);
+      return true;
+    };
+    const tryMove = (localPoint) => {
+      if (!tangentDragRef.current) return false;
+      const curvePoint = findPointOnFunction(localPoint, tangentDragRef.current.fnId, true);
+      if (curvePoint) {
+        onTangentPointsChange((prev) => prev.map((tangent) => tangent.id === tangentDragRef.current.id
+          ? { ...tangent, x: curvePoint.x, y: curvePoint.y, parameterValue: curvePoint.parameterValue }
+          : tangent));
+      }
+      return true;
+    };
+    const end = () => {
+      tangentDragRef.current = null;
+    };
+    return { tangentDragRef, tryStart, tryMove, end };
+  }
+
   function PlotCanvas({
     functions,
     view,
@@ -110,26 +189,32 @@
     onTangentPointsChange,
     parameters
   }) {
-    const canvasRef = useRef(null);
+    const baseCanvasRef = useRef(null);
+    const overlayCanvasRef = useRef(null);
     const wrapRef = useRef(null);
-    const [size, setSize] = useState({ w: 800, h: 600 });
-    const [mouse, setMouse] = useState(null);
-    const draggingRef = useRef(null);
-    const tangentDragRef = useRef(null);
+    const size = useCanvasSize(wrapRef);
+    const mouseRef = useRef(null);
+    const [hoverVersion, setHoverVersion] = useState(0);
+    const hoverRafRef = useRef(0);
+    const scheduleHover = useCallback(() => {
+      if (hoverRafRef.current) return;
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = 0;
+        setHoverVersion((v) => (v + 1) | 0);
+      });
+    }, []);
+    const setHoverMouse = useCallback((next) => {
+      mouseRef.current = next;
+      scheduleHover();
+    }, [scheduleHover]);
+    useEffect(() => () => {
+      if (hoverRafRef.current) cancelAnimationFrame(hoverRafRef.current);
+    }, []);
     const [labelFade, setLabelFade] = useState(null);
     const [revealedPointKey, setRevealedPointKey] = useState(null);
     const revealTimerRef = useRef(null);
     const prevCoordModeRef = useRef(coordMode);
-    const pinchRef = useRef(null);
-    useEffect(() => {
-      if (!wrapRef.current) return;
-      const ro = new ResizeObserver(() => {
-        const r = wrapRef.current.getBoundingClientRect();
-        setSize({ w: Math.floor(r.width), h: Math.floor(r.height) });
-      });
-      ro.observe(wrapRef.current);
-      return () => ro.disconnect();
-    }, []);
+    useEffect(() => { scheduleHover(); }, [size.w, size.h, scheduleHover]);
     const worldToScreen = useCallback((wx, wy) => {
       const { cx, cy, scaleX, scaleY } = view;
       return [size.w / 2 + (wx - cx) * scaleX, size.h / 2 - (wy - cy) * scaleY];
@@ -232,18 +317,24 @@
       size.h,
       parameters
     ), [curveEntities, functions, implicitCurveSamples, parameters, sampledPolylineCurves, worldBounds, view.scaleX, view.scaleY, size.h, size.w]);
-    const pointOverlay = useMemo(() => {
-      const screenPoints = specialPoints.map((point) => {
+    const screenPoints = useMemo(() => {
+      return specialPoints.map((point) => {
         const [sx, sy] = worldToScreen(point.x, point.y);
-        const distanceToMouse = mouse ? Math.hypot(sx - mouse.x, sy - mouse.y) : Infinity;
-        return { ...point, key: getPointKey(point), sx, sy, distanceToMouse };
+        return { ...point, key: getPointKey(point), sx, sy };
       }).filter((point) => point.sx >= -16 && point.sx <= size.w + 16 && point.sy >= -16 && point.sy <= size.h + 16);
-      const snappedPoint = mouse ? screenPoints.reduce((closest, point) => point.distanceToMouse < (closest?.distanceToMouse ?? Infinity) ? point : closest, null) : null;
-      return {
-        screenPoints,
-        snappedPoint: snappedPoint && snappedPoint.distanceToMouse <= 16 ? snappedPoint : null
-      };
-    }, [mouse, size, specialPoints, worldToScreen]);
+    }, [specialPoints, worldToScreen, size.w, size.h]);
+    const snappedPoint = useMemo(() => {
+      const mouse = mouseRef.current;
+      if (!mouse) return null;
+      let best = null;
+      let bestDist = Infinity;
+      for (const point of screenPoints) {
+        const dist = Math.hypot(point.sx - mouse.x, point.sy - mouse.y);
+        if (dist < bestDist) { best = point; bestDist = dist; }
+      }
+      return best && bestDist <= 16 ? { ...best, distanceToMouse: bestDist } : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [screenPoints, hoverVersion]);
     const implicitCurves = useMemo(() => implicitCurveSamples.map((fn) => {
       const segments = fn.segments.map((segment) => {
         const aScreen = worldToScreen(segment.ax, segment.ay);
@@ -333,6 +424,7 @@
       return { ...tangent, color: owner.color, ownerLabel: owner.label, sx, sy };
     }).filter((handle) => handle && handle.sx >= -20 && handle.sx <= size.w + 20 && handle.sy >= -20 && handle.sy <= size.h + 20), [functions, size.h, size.w, tangentPoints, worldToScreen]);
     const curveTracker = useMemo(() => {
+      const mouse = mouseRef.current;
       if (!mouse) return null;
       const [wx] = screenToWorld(mouse.x, mouse.y);
       let best = null;
@@ -383,22 +475,23 @@
         });
       });
       return best && best.dist <= 26 ? best : null;
-    }, [mouse, curveEntities, implicitCurves, parameters, sampledPolylineCurves, worldToScreen, screenToWorld]);
-    const visiblePoint = pointOverlay.snappedPoint && pointOverlay.snappedPoint.key === revealedPointKey ? pointOverlay.snappedPoint : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [hoverVersion, curveEntities, implicitCurves, parameters, sampledPolylineCurves, worldToScreen, screenToWorld]);
+    const visiblePoint = snappedPoint && snappedPoint.key === revealedPointKey ? snappedPoint : null;
     const showCurveTrace = !visiblePoint && !!curveTracker;
     useEffect(() => {
       window.clearTimeout(revealTimerRef.current);
-      if (!pointOverlay.snappedPoint) {
+      if (!snappedPoint) {
         setRevealedPointKey(null);
         return;
       }
-      const nextKey = pointOverlay.snappedPoint.key;
+      const nextKey = snappedPoint.key;
       setRevealedPointKey(null);
       revealTimerRef.current = window.setTimeout(() => {
         setRevealedPointKey(nextKey);
       }, 150);
       return () => window.clearTimeout(revealTimerRef.current);
-    }, [pointOverlay.snappedPoint?.key]);
+    }, [snappedPoint?.key]);
     useEffect(() => {
       if (!onTrace) return;
       if (visiblePoint) {
@@ -422,9 +515,9 @@
       }
       onTrace(null);
     }, [onTrace, theme.ink, visiblePoint, curveTracker]);
-    const draw = useCallback(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
+    const prepareCanvas = (ref) => {
+      const canvas = ref.current;
+      if (!canvas) return null;
       const dpr = window.devicePixelRatio || 1;
       canvas.width = size.w * dpr;
       canvas.height = size.h * dpr;
@@ -432,6 +525,52 @@
       canvas.style.height = size.h + "px";
       const ctx = canvas.getContext("2d");
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return ctx;
+    };
+    const drawPointMarker = (ctx, point, radius) => {
+      ctx.save();
+      if (point.type === "intersection") {
+        ctx.lineWidth = 1.4;
+        ctx.strokeStyle = theme.panel;
+        ctx.beginPath();
+        ctx.arc(point.sx, point.sy, radius, -Math.PI / 2, Math.PI / 2);
+        ctx.fillStyle = point.color;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(point.sx, point.sy, radius, Math.PI / 2, -Math.PI / 2);
+        ctx.fillStyle = point.color2 || point.color;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(point.sx, point.sy, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = theme.ink;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      } else if (point.type === "max" || point.type === "min") {
+        ctx.fillStyle = point.color;
+        ctx.strokeStyle = theme.panel;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(point.sx, point.sy - radius);
+        ctx.lineTo(point.sx + radius, point.sy);
+        ctx.lineTo(point.sx, point.sy + radius);
+        ctx.lineTo(point.sx - radius, point.sy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = point.color;
+        ctx.strokeStyle = theme.panel;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(point.sx, point.sy, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+    const drawBase = useCallback(() => {
+      const ctx = prepareCanvas(baseCanvasRef);
+      if (!ctx) return;
       ctx.fillStyle = theme.bg;
       ctx.fillRect(0, 0, size.w, size.h);
       const getGridStep = (scale) => {
@@ -588,55 +727,30 @@
         });
         ctx.restore();
       }
-      const { screenPoints, snappedPoint } = pointOverlay;
-      const activePoint = snappedPoint;
+      screenPoints.forEach((point) => drawPointMarker(ctx, point, 4));
+    }, [
+      implicitCurves,
+      sampledPolylineCurves,
+      screenPoints,
+      selectedFunctionId,
+      size.h,
+      size.w,
+      tangentHandles,
+      tangentMode,
+      theme,
+      view,
+      worldBounds,
+      worldToScreen
+    ]);
+    const drawOverlay = useCallback(() => {
+      const ctx = prepareCanvas(overlayCanvasRef);
+      if (!ctx) return;
+      ctx.clearRect(0, 0, size.w, size.h);
+      if (snappedPoint) drawPointMarker(ctx, snappedPoint, 5.5);
       const labelPhases = labelFade ? [
         { mode: labelFade.from, alpha: 1 - labelFade.progress },
         { mode: labelFade.to, alpha: labelFade.progress }
       ] : [{ mode: coordMode, alpha: 1 }];
-      screenPoints.forEach((point) => {
-        ctx.save();
-        const isActive = activePoint === point;
-        const radius = isActive ? 5.5 : 4;
-        if (point.type === "intersection") {
-          ctx.lineWidth = 1.4;
-          ctx.strokeStyle = theme.panel;
-          ctx.beginPath();
-          ctx.arc(point.sx, point.sy, radius, -Math.PI / 2, Math.PI / 2);
-          ctx.fillStyle = point.color;
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(point.sx, point.sy, radius, Math.PI / 2, -Math.PI / 2);
-          ctx.fillStyle = point.color2 || point.color;
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(point.sx, point.sy, radius, 0, Math.PI * 2);
-          ctx.strokeStyle = theme.ink;
-          ctx.lineWidth = 1.2;
-          ctx.stroke();
-        } else if (point.type === "max" || point.type === "min") {
-          ctx.fillStyle = point.color;
-          ctx.strokeStyle = theme.panel;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(point.sx, point.sy - radius);
-          ctx.lineTo(point.sx + radius, point.sy);
-          ctx.lineTo(point.sx, point.sy + radius);
-          ctx.lineTo(point.sx - radius, point.sy);
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
-        } else {
-          ctx.fillStyle = point.color;
-          ctx.strokeStyle = theme.panel;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(point.sx, point.sy, radius, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-        }
-        ctx.restore();
-      });
       const typeText = { zero: "zero", max: "max", min: "min", intersection: "\u2229" };
       const drawReadout = (point, { titleLines, color, showCrosshair }) => {
         ctx.save();
@@ -731,66 +845,40 @@
     }, [
       coordMode,
       curveTracker,
-      implicitCurves,
       labelFade,
-      pointOverlay,
-      selectedFunctionId,
       showCurveTrace,
-      sampledPolylineCurves,
-      size,
-      tangentHandles,
-      tangentMode,
+      size.h,
+      size.w,
+      snappedPoint,
       theme,
-      view,
-      visiblePoint,
-      worldBounds,
-      worldToScreen
+      visiblePoint
     ]);
-    useEffect(() => {
-      draw();
-    }, [draw]);
+    useEffect(() => { drawBase(); }, [drawBase]);
+    useEffect(() => { drawOverlay(); }, [drawOverlay]);
+    const { draggingRef, pinchRef, zoomAroundPoint } = usePanAndPinch({ setView, size });
+    const { tangentDragRef, tryStart: tryTangentStart, tryMove: tryTangentMove, end: endTangent } = useTangentDrag({
+      selectedFunction,
+      tangentMode,
+      tangentHandles,
+      tangentPoints,
+      findPointOnFunction,
+      onTangentPointsChange
+    });
     const onMouseDown = (e) => {
-      const rect = canvasRef.current.getBoundingClientRect();
+      const rect = overlayCanvasRef.current.getBoundingClientRect();
       const nextMouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-      if (tangentMode && selectedFunction) {
-        const handle = tangentHandles.filter((item) => item.fnId === selectedFunction.id).reduce((best, item) => {
-          const dist = Math.hypot(nextMouse.x - item.sx, nextMouse.y - item.sy);
-          return !best || dist < best.dist ? { item, dist } : best;
-        }, null);
-        if (handle && handle.dist <= 14) {
-          tangentDragRef.current = { id: handle.item.id, fnId: selectedFunction.id };
-          setMouse(nextMouse);
-          return;
-        }
-        const curvePoint = findPointOnFunction(nextMouse, selectedFunction.id);
-        if (curvePoint) {
-          const seq = tangentPoints.filter((point) => point.fnId === selectedFunction.id).length;
-          const nextTangent = {
-            id: Math.random().toString(36).slice(2, 9),
-            fnId: selectedFunction.id,
-            seq,
-            x: curvePoint.x,
-            y: curvePoint.y,
-            parameterValue: curvePoint.parameterValue
-          };
-          tangentDragRef.current = { id: nextTangent.id, fnId: selectedFunction.id };
-          onTangentPointsChange((prev) => [...prev, nextTangent]);
-          setMouse(nextMouse);
-          return;
-        }
+      if (tryTangentStart(nextMouse)) {
+        setHoverMouse(nextMouse);
+        return;
       }
       draggingRef.current = { x: e.clientX, y: e.clientY, view: { ...view } };
-      setMouse(nextMouse);
+      setHoverMouse(nextMouse);
     };
     const onMouseMove = (e) => {
-      const rect = canvasRef.current.getBoundingClientRect();
+      const rect = overlayCanvasRef.current.getBoundingClientRect();
       const nextMouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-      if (tangentDragRef.current) {
-        const curvePoint = findPointOnFunction(nextMouse, tangentDragRef.current.fnId, true);
-        if (curvePoint) {
-          onTangentPointsChange((prev) => prev.map((tangent) => tangent.id === tangentDragRef.current.id ? { ...tangent, x: curvePoint.x, y: curvePoint.y, parameterValue: curvePoint.parameterValue } : tangent));
-        }
-        setMouse(nextMouse);
+      if (tryTangentMove(nextMouse)) {
+        setHoverMouse(nextMouse);
         return;
       }
       if (draggingRef.current) {
@@ -801,36 +889,23 @@
           cx: draggingRef.current.view.cx - dx / draggingRef.current.view.scaleX,
           cy: draggingRef.current.view.cy + dy / draggingRef.current.view.scaleY
         });
-        setMouse(null);
+        setHoverMouse(null);
         return;
       }
-      setMouse(nextMouse);
+      setHoverMouse(nextMouse);
     };
     const onMouseUp = () => {
       draggingRef.current = null;
-      tangentDragRef.current = null;
+      endTangent();
     };
     const onMouseLeave = () => {
       draggingRef.current = null;
-      tangentDragRef.current = null;
-      setMouse(null);
+      endTangent();
+      setHoverMouse(null);
     };
-    const zoomAroundPoint = useCallback((baseView, screenX, screenY, factorX, factorY) => {
-      const sourceView = sanitizeView(baseView);
-      const wxBefore = sourceView.cx + (screenX - size.w / 2) / sourceView.scaleX;
-      const wyBefore = sourceView.cy - (screenY - size.h / 2) / sourceView.scaleY;
-      const scaleX = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, sourceView.scaleX * factorX));
-      const scaleY = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, sourceView.scaleY * factorY));
-      setView({
-        cx: wxBefore - (screenX - size.w / 2) / scaleX,
-        cy: wyBefore + (screenY - size.h / 2) / scaleY,
-        scaleX,
-        scaleY
-      });
-    }, [setView, size.h, size.w]);
     const onWheel = (e) => {
       e.preventDefault();
-      const rect = canvasRef.current.getBoundingClientRect();
+      const rect = overlayCanvasRef.current.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
       const factor = Math.exp(-e.deltaY * 15e-4);
@@ -839,12 +914,12 @@
       zoomAroundPoint(view, mx, my, xOnly ? factor : yOnly ? 1 : factor, yOnly ? factor : xOnly ? 1 : factor);
     };
     const onTouchStart = (e) => {
-      const rect = canvasRef.current.getBoundingClientRect();
+      const rect = overlayCanvasRef.current.getBoundingClientRect();
       if (e.touches.length === 1) {
         const t = e.touches[0];
         draggingRef.current = { x: t.clientX, y: t.clientY, view: { ...view } };
         pinchRef.current = null;
-        setMouse({ x: t.clientX - rect.left, y: t.clientY - rect.top });
+        setHoverMouse({ x: t.clientX - rect.left, y: t.clientY - rect.top });
       } else if (e.touches.length === 2) {
         draggingRef.current = null;
         const [t1, t2] = e.touches;
@@ -858,12 +933,12 @@
           midX: (t1.clientX + t2.clientX) / 2 - rect.left,
           midY: (t1.clientY + t2.clientY) / 2 - rect.top
         };
-        setMouse(null);
+        setHoverMouse(null);
       }
     };
     const onTouchMove = (e) => {
       e.preventDefault();
-      const rect = canvasRef.current.getBoundingClientRect();
+      const rect = overlayCanvasRef.current.getBoundingClientRect();
       if (e.touches.length === 1 && draggingRef.current) {
         const t = e.touches[0];
         const dx = t.clientX - draggingRef.current.x;
@@ -873,7 +948,7 @@
           cx: draggingRef.current.view.cx - dx / draggingRef.current.view.scaleX,
           cy: draggingRef.current.view.cy + dy / draggingRef.current.view.scaleY
         });
-        setMouse({ x: t.clientX - rect.left, y: t.clientY - rect.top });
+        setHoverMouse({ x: t.clientX - rect.left, y: t.clientY - rect.top });
       } else if (e.touches.length === 2 && pinchRef.current) {
         const [t1, t2] = e.touches;
         const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
@@ -891,13 +966,19 @@
       if (e.touches.length === 0) {
         draggingRef.current = null;
         pinchRef.current = null;
-        setMouse(null);
+        setHoverMouse(null);
       }
     };
-    return /* @__PURE__ */ React.createElement("div", { ref: wrapRef, style: { position: "absolute", inset: 0, overflow: "hidden" } }, /* @__PURE__ */ React.createElement(
-      "canvas",
-      {
-        ref: canvasRef,
+    return /* @__PURE__ */ React.createElement(
+      "div",
+      { ref: wrapRef, style: { position: "absolute", inset: 0, overflow: "hidden" } },
+      /* @__PURE__ */ React.createElement("canvas", {
+        ref: baseCanvasRef,
+        style: { display: "block", position: "absolute", inset: 0, pointerEvents: "none" },
+        "aria-hidden": "true"
+      }),
+      /* @__PURE__ */ React.createElement("canvas", {
+        ref: overlayCanvasRef,
         onMouseDown,
         onMouseMove,
         onMouseUp,
@@ -907,10 +988,15 @@
         onTouchMove,
         onTouchEnd,
         onTouchCancel: onTouchEnd,
-        style: { display: "block", cursor: draggingRef.current || tangentDragRef.current ? "grabbing" : "crosshair" },
+        style: {
+          display: "block",
+          position: "absolute",
+          inset: 0,
+          cursor: draggingRef.current || tangentDragRef.current ? "grabbing" : "crosshair"
+        },
         "aria-label": "\u51FD\u6570\u7ED8\u56FE\u753B\u5E03"
-      }
-    ));
+      })
+    );
   }
   function FunctionRow({ fn, theme, onChange, onDelete, isOnly, selected, onSelect }) {
     const [editing, setEditing] = useState(!fn.expr);

@@ -7,6 +7,15 @@
     exact: 'exact',
     decimal: 'decimal',
   };
+  // 统一数值容差。locus-math.js 内另有一组同名私有常量，两处要同步修改。
+  const TOLERANCE = {
+    EQUATION: 1e-12,          // interpolateIsoPoint 等价判定
+    SEGMENT: 1e-9,            // 线段相交/最近点 epsilon
+    ROOT_ZERO: 1e-8,          // 零点扫描判定
+    NEWTON_CONVERGE: 1e-8,    // refineImplicitIntersection 位移收敛
+    IMPLICIT_RESIDUAL: 1e-5,  // 隐函数残差可接受上限
+    REL_RADICAL: 2e-4,        // formatExactNumber 相对容差
+  };
 
   function clampViewScale(value, fallback = DEFAULT_VIEW.scaleX) {
     if (!Number.isFinite(+value)) return fallback;
@@ -126,11 +135,11 @@
     for (const { base, symbol } of constants) {
       const ratio = value / base;
       const frac = bestFraction(ratio, 24);
-      const tolerance = Math.max(1e-6, Math.abs(value) * 2e-4);
+      const tolerance = Math.max(1e-6, Math.abs(value) * TOLERANCE.REL_RADICAL);
       if (frac.err * Math.abs(base) < tolerance) return formatFraction(frac.num, frac.den, symbol);
     }
     const radical = bestRadicalFraction(value);
-    const radicalTolerance = Math.max(1e-6, Math.abs(value) * 2e-4);
+    const radicalTolerance = Math.max(1e-6, Math.abs(value) * TOLERANCE.REL_RADICAL);
     if (radical && radical.err < radicalTolerance) {
       return formatRadicalFraction(value, radical.coeff, radical.den, radical.rad);
     }
@@ -390,7 +399,7 @@
     const step = (xMax - xMin) / sampleCount;
     let prevX = xMin;
     let prevY = evaluateSafe(fn, prevX);
-    if (Number.isFinite(prevY) && Math.abs(prevY) <= 1e-8) pushRoot(prevX);
+    if (Number.isFinite(prevY) && Math.abs(prevY) <= TOLERANCE.ROOT_ZERO) pushRoot(prevX);
     for (let i = 1; i <= sampleCount; i++) {
       const x = xMin + step * i;
       const y = evaluateSafe(fn, x);
@@ -399,7 +408,7 @@
         prevY = y;
         continue;
       }
-      if (Math.abs(y) <= 1e-8) pushRoot(x);
+      if (Math.abs(y) <= TOLERANCE.ROOT_ZERO) pushRoot(x);
       if (prevY * y < 0) {
         const root = bisectRoot(fn, prevX, x);
         if (root != null) pushRoot(root);
@@ -741,8 +750,8 @@
   }
 
   function interpolateIsoPoint(a, b, fa, fb) {
-    if (Math.abs(fa) < 1e-12 && Math.abs(fb) < 1e-12) return (a + b) / 2;
-    if (Math.abs(fa - fb) < 1e-12) return (a + b) / 2;
+    if (Math.abs(fa) < TOLERANCE.EQUATION && Math.abs(fb) < TOLERANCE.EQUATION) return (a + b) / 2;
+    if (Math.abs(fa - fb) < TOLERANCE.EQUATION) return (a + b) / 2;
     const t = Math.max(0, Math.min(1, fa / (fa - fb)));
     return a + (b - a) * t;
   }
@@ -833,7 +842,7 @@
       .filter(fn => fn.segments.length);
   }
 
-  function segmentIntersection(a, b, epsilon = 1e-9) {
+  function segmentIntersection(a, b, epsilon = TOLERANCE.SEGMENT) {
     const rX = a.bx - a.ax;
     const rY = a.by - a.ay;
     const sX = b.bx - b.ax;
@@ -873,7 +882,7 @@
       const f = evaluateImplicitSafe(leftCompiled, x, y, params);
       const g = evaluateImplicitSafe(rightCompiled, x, y, params);
       if (!Number.isFinite(f) || !Number.isFinite(g)) return null;
-      if (Math.max(Math.abs(f), Math.abs(g)) < 1e-8) return { x, y };
+      if (Math.max(Math.abs(f), Math.abs(g)) < TOLERANCE.NEWTON_CONVERGE) return { x, y };
 
       const hx = Math.max(1e-4, Math.abs(x) * 1e-4);
       const hy = Math.max(1e-4, Math.abs(y) * 1e-4);
@@ -900,13 +909,13 @@
 
       x += dx;
       y += dy;
-      if (Math.max(Math.abs(dx), Math.abs(dy)) < 1e-8) break;
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < TOLERANCE.NEWTON_CONVERGE) break;
     }
 
     const finalF = evaluateImplicitSafe(leftCompiled, x, y, params);
     const finalG = evaluateImplicitSafe(rightCompiled, x, y, params);
     if (!Number.isFinite(finalF) || !Number.isFinite(finalG)) return null;
-    return Math.max(Math.abs(finalF), Math.abs(finalG)) < 1e-5 ? { x, y } : null;
+    return Math.max(Math.abs(finalF), Math.abs(finalG)) < TOLERANCE.IMPLICIT_RESIDUAL ? { x, y } : null;
   }
 
   function intersectImplicitCurves(curves, xTol, yTol, params = {}) {
@@ -959,7 +968,7 @@
     const abx = b.x - a.x;
     const aby = b.y - a.y;
     const lenSq = abx * abx + aby * aby;
-    if (lenSq < 1e-9) return { x: a.x, y: a.y, t: 0, dist: Math.hypot(point.x - a.x, point.y - a.y) };
+    if (lenSq < TOLERANCE.SEGMENT) return { x: a.x, y: a.y, t: 0, dist: Math.hypot(point.x - a.x, point.y - a.y) };
     const t = Math.max(0, Math.min(1, ((point.x - a.x) * abx + (point.y - a.y) * aby) / lenSq));
     const x = a.x + abx * t;
     const y = a.y + aby * t;

@@ -3,6 +3,11 @@
     NUM: 'NUM', ID: 'ID', OP: 'OP', LP: 'LP', RP: 'RP',
     COMMA: 'COMMA', QMARK: 'QMARK', COLON: 'COLON', END: 'END',
   };
+  // 私有容差集合。与 locus-shared.js 的 TOLERANCE 保持同步修改。
+  const TOLERANCE = {
+    EQUATION: 1e-12, // `=` 运算符视作相等的上限
+    RANGE: 1e-9,     // 区间边界 padding
+  };
   const COORDINATE_VARS = new Set(['x', 'y', 't', 'theta']);
   const normalizeInput = (src) => (src || '')
     .replace(/θ/gu, 'theta')
@@ -262,7 +267,7 @@
       case '!=': return left !== right ? 1 : 0;
       case '&&': return left && right ? 1 : 0;
       case '||': return left || right ? 1 : 0;
-      case '=': return Math.abs(left - right) <= 1e-12 ? 1 : 0;
+      case '=': return Math.abs(left - right) <= TOLERANCE.EQUATION ? 1 : 0;
       default: throw new Error('Bad op: ' + node.op);
     }
   }
@@ -312,8 +317,75 @@
     return vars;
   }
 
+  function codegenCall(name, args) {
+    if (name === 'if') {
+      if (args.length !== 3) throw new Error('if expects 3 arguments');
+      return '((' + args[0] + ')?(' + args[1] + '):(' + args[2] + '))';
+    }
+    if (name === 'piecewise') {
+      if (args.length < 3 || args.length % 2 === 0) throw new Error('piecewise expects condition/value pairs');
+      let expr = '(' + args[args.length - 1] + ')';
+      for (let i = args.length - 3; i >= 0; i -= 2) {
+        expr = '((' + args[i] + ')?(' + args[i + 1] + '):' + expr + ')';
+      }
+      return expr;
+    }
+    if (name === 'sec') return '(1/Math.cos(' + args[0] + '))';
+    if (name === 'csc') return '(1/Math.sin(' + args[0] + '))';
+    if (name === 'cot') return '(1/Math.tan(' + args[0] + '))';
+    if (name === 'ln') return 'Math.log(' + args[0] + ')';
+    if (name === 'log') return 'Math.log10(' + args[0] + ')';
+    if (typeof Math[name] === 'function') {
+      return 'Math.' + name + '(' + args.join(',') + ')';
+    }
+    throw new Error('Not a function: ' + name);
+  }
+
+  function codegenAST(node) {
+    if (node.num !== undefined) return '(' + JSON.stringify(node.num) + ')';
+    if (node.id !== undefined) {
+      switch (node.id) {
+        case 'pi': return '(Math.PI)';
+        case 'e': return '(Math.E)';
+        case 'tau': return '(2*Math.PI)';
+        case 'nan': return '(NaN)';
+        default: return 'S.' + node.id;
+      }
+    }
+    if (node.call !== undefined) {
+      return codegenCall(node.call, node.args.map(codegenAST));
+    }
+    if (node.op === 'neg') return '(-(' + codegenAST(node.arg) + '))';
+    if (node.op === '!') return '((' + codegenAST(node.arg) + ')?0:1)';
+    if (node.op === '?:') {
+      return '(' + codegenAST(node.test) + '?(' + codegenAST(node.yes) + '):(' + codegenAST(node.no) + '))';
+    }
+    const L = codegenAST(node.left);
+    const R = codegenAST(node.right);
+    switch (node.op) {
+      case '+': return '(' + L + '+' + R + ')';
+      case '-': return '(' + L + '-' + R + ')';
+      case '*': return '(' + L + '*' + R + ')';
+      case '/': return '(' + L + '/' + R + ')';
+      case '%': return '(' + L + '%' + R + ')';
+      case '^': return 'Math.pow(' + L + ',' + R + ')';
+      case '<': return '((' + L + '<' + R + ')?1:0)';
+      case '>': return '((' + L + '>' + R + ')?1:0)';
+      case '<=': return '((' + L + '<=' + R + ')?1:0)';
+      case '>=': return '((' + L + '>=' + R + ')?1:0)';
+      case '==': return '((' + L + '===' + R + ')?1:0)';
+      case '!=': return '((' + L + '!==' + R + ')?1:0)';
+      case '&&': return '((' + L + '&&' + R + ')?1:0)';
+      case '||': return '((' + L + '||' + R + ')?1:0)';
+      case '=': return '((Math.abs(' + L + '-' + R + ')<=' + TOLERANCE.EQUATION + ')?1:0)';
+      default: throw new Error('Bad op: ' + node.op);
+    }
+  }
+
   function buildEvaluator(node) {
-    return (vars = {}) => evalNode(node, { ...EXTRA, ...vars });
+    const body = codegenAST(node);
+    const fn = new Function('S', 'return (' + body + ');');
+    return (vars) => fn(vars || {});
   }
 
   function collectRangeVariables(rangeStatements) {
@@ -345,7 +417,7 @@
   }
 
   function inResolvedRange(value, range) {
-    return !range || (value >= range.min - 1e-9 && value <= range.max + 1e-9);
+    return !range || (value >= range.min - TOLERANCE.RANGE && value <= range.max + TOLERANCE.RANGE);
   }
 
   window.LocusMath = {

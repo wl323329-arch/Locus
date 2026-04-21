@@ -168,21 +168,18 @@
         if (!f.expr || !f.expr.trim()) return { ...f, label, curveKind: fallbackKind, compiled: null, error: null };
         try {
           const compiled = window.LocusMath.compile(f.expr);
-          const params = Object.fromEntries(
-            (compiled.parameters || []).map((name) => [
-              name,
-              sanitizeParameterConfig(parameterConfig[name], defaultParameterConfig(name)).value
-            ])
+          const defaults = Object.fromEntries(
+            (compiled.parameters || []).map((name) => [name, defaultParameterConfig(name).value])
           );
-          if (compiled.kind === "explicit") compiled.evaluate(0, params);
-          else if (compiled.kind === "implicit") compiled.evaluate(0, 0, params);
-          else compiled.evaluate(compiled.parameterVar === "theta" ? 0 : 1, params);
+          if (compiled.kind === "explicit") compiled.evaluate(0, defaults);
+          else if (compiled.kind === "implicit") compiled.evaluate(0, 0, defaults);
+          else compiled.evaluate(compiled.parameterVar === "theta" ? 0 : 1, defaults);
           return { ...f, label, curveKind: compiled.kind, compiled, error: null };
         } catch (err) {
           return { ...f, label, curveKind: fallbackKind, compiled: null, error: humanizeError(err.message) };
         }
       });
-    }, [functions, parameterConfig]);
+    }, [functions]);
     const parameterNames = useMemo(() => {
       const names = /* @__PURE__ */ new Set();
       compiledFunctions.forEach((fn) => {
