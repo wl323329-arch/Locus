@@ -1,0 +1,125 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #f7f5f0;
+}
+#root { height: 100vh; display: flex; }
+::selection { background: rgba(0,0,0,0.15); }
+input::selection { background: rgba(0,0,0,0.25); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.25); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,0.4); }
+::-webkit-scrollbar-track { background: transparent; }
+
+.tweaks-panel {
+  position: absolute; top: 54px; right: 16px;
+  background: rgba(255, 255, 255, 0.985);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(0,0,0,0.1);
+  border-radius: 8px;
+  box-shadow: 0 10px 32px rgba(0,0,0,0.16);
+  padding: 12px; width: 220px; z-index: 1000;
+  font-family: 'Inter', sans-serif;
+}
+.tweaks-panel h3 {
+  margin: 0 0 10px 0; font-size: 11px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: #555; font-weight: 600;
+}
+.theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.theme-swatch {
+  aspect-ratio: 1; border-radius: 6px; cursor: pointer;
+  border: 2px solid transparent;
+  transition: transform 120ms, border-color 120ms;
+  position: relative; overflow: hidden;
+}
+.theme-swatch:hover { transform: translateY(-1px); }
+.theme-swatch-label {
+  margin-top: 4px; font-size: 10px; color: #666;
+  text-align: center; font-family: 'JetBrains Mono', monospace;
+}
+.popover-grow {
+  transform-origin: top right;
+  animation: popover-grow 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.coord-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(0,0,0,0.08);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.96);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+}
+.coord-mode-switch button {
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: background 160ms, color 160ms, opacity 160ms;
+}
+.coord-mode-switch button.active {
+  background: rgba(0,0,0,0.08);
+}
+@keyframes popover-grow {
+  from { opacity: 0; transform: translateY(-6px) scale(0.92); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.resize-bar { background: transparent; transition: background 120ms; }
+.resize-handle:hover .resize-bar { background: rgba(128,128,128,0.35); }
+body.resizing { cursor: col-resize !important; user-select: none; }
+body.resizing * { cursor: col-resize !important; }
+
+.sidebar-shell {
+  transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  overflow: hidden;
+  position: relative;
+  flex-shrink: 0;
+}
+.sidebar-shell.animating-width { }
+.sidebar-shell.no-anim { transition: none; }
+.sidebar-content {
+  position: absolute; inset: 0;
+  transition: opacity 200ms ease, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.sidebar-content.hidden {
+  opacity: 0;
+  transform: translateX(-16px);
+  pointer-events: none;
+}
+.sidebar-rail {
+  position: absolute; inset: 0;
+  transition: opacity 200ms ease 120ms, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.sidebar-rail.hidden {
+  opacity: 0;
+  transform: translateX(-8px);
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 200ms ease;
+}
+
+button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+canvas { touch-action: none; }
+.expr-preview {
+  display: block;
+  white-space: pre-wrap;
+}
+.expr-token-fn { color: #245ec7; font-weight: 600; }
+.expr-token-var { color: #18794e; font-weight: 600; }
+.expr-token-const { color: #7a3ec8; font-weight: 600; }
+.expr-token-num { color: #9a6700; }
+.expr-token-op { color: #6d6a62; }
