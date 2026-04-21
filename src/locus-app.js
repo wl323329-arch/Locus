@@ -342,6 +342,30 @@
         return { ...prev, [name]: next };
       });
     }, []);
+    const applyExample = useCallback((expr) => {
+      setFunctions((prev) => {
+        const selectedIndex = prev.findIndex((fn) => fn.id === selectedFunctionId);
+        if (selectedIndex >= 0 && !prev[selectedIndex].expr.trim()) {
+          const next = [...prev];
+          next[selectedIndex] = { ...next[selectedIndex], expr };
+          return next;
+        }
+        const palette = theme.funcPalette;
+        const color = window.LocusShared.nextFreeColor(prev, palette);
+        const labelSeq = window.LocusShared.nextFreeSeq(prev);
+        const id = Math.random().toString(36).slice(2, 9);
+        setSelectedFunctionId(id);
+        return [...prev, {
+          id,
+          expr,
+          visible: true,
+          color,
+          thickness: 2,
+          labelSeq,
+          label: formatFnLabel(labelSeq)
+        }];
+      });
+    }, [selectedFunctionId, theme.funcPalette]);
     const scaleView = useCallback((factorX, factorY) => {
       setView((current) => sanitizeView({
         ...current,
@@ -421,19 +445,19 @@
       const onKey = (e) => {
         const tag = e.target && e.target.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || e.target && e.target.isContentEditable) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "+" || e.key === "=") {
-        e.preventDefault();
-        scaleView(1.4, 1.4);
-      } else if (e.key === "-" || e.key === "_") {
-        e.preventDefault();
-        scaleView(1 / 1.4, 1 / 1.4);
-      } else if (e.key === "0" || e.key === "H" || e.key === "h") {
-        e.preventDefault();
-        resetView();
-      } else if (e.key === "f" || e.key === "F") {
-        e.preventDefault();
-        fitView();
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        if (e.key === "+" || e.key === "=") {
+          e.preventDefault();
+          scaleView(1.4, 1.4);
+        } else if (e.key === "-" || e.key === "_") {
+          e.preventDefault();
+          scaleView(1 / 1.4, 1 / 1.4);
+        } else if (e.key === "0" || e.key === "H" || e.key === "h") {
+          e.preventDefault();
+          resetView();
+        } else if (e.key === "f" || e.key === "F") {
+          e.preventDefault();
+          fitView();
         } else if (e.key === "e" || e.key === "E") {
           e.preventDefault();
           exportPNG();
@@ -463,6 +487,7 @@
         parameterNames,
         parameterConfig,
         onParameterChange,
+        onApplyExample: applyExample,
         collapsed,
         expandedWidth: sidebarWidth,
         onCollapse: () => setCollapsed(true),
@@ -490,26 +515,26 @@
       {
         className: coordMode === COORD_MODES.exact ? "active" : "",
         onClick: () => setCoordMode(COORD_MODES.exact),
-        title: "Show coordinates as exact fractions of \u03C0, e where possible",
-        "aria-label": "Exact coordinates",
+        title: "\u5C3D\u91CF\u7528\u7CBE\u786E\u5F62\u5F0F\u663E\u793A\u5750\u6807",
+        "aria-label": "\u7CBE\u786E\u5750\u6807",
         style: { color: coordMode === COORD_MODES.exact ? theme.ink : theme.muted, background: coordMode === COORD_MODES.exact ? theme.chip : "transparent" }
       },
-      "Exact"
+      "\u7CBE\u786E"
     ), /* @__PURE__ */ React.createElement(
       "button",
       {
         className: coordMode === COORD_MODES.decimal ? "active" : "",
         onClick: () => setCoordMode(COORD_MODES.decimal),
-        title: "Show coordinates in decimal form",
-        "aria-label": "Decimal coordinates",
+        title: "\u7528\u5C0F\u6570\u5F62\u5F0F\u663E\u793A\u5750\u6807",
+        "aria-label": "\u5C0F\u6570\u5750\u6807",
         style: { color: coordMode === COORD_MODES.decimal ? theme.ink : theme.muted, background: coordMode === COORD_MODES.decimal ? theme.chip : "transparent" }
       },
-      "Decimal"
+      "\u5C0F\u6570"
     )), /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: () => setTangentMode((value) => !value),
-        title: tangentMode ? "Exit tangent mode" : "Enter tangent mode",
+        title: tangentMode ? "\u9000\u51FA\u5207\u7EBF\u6A21\u5F0F" : "\u8FDB\u5165\u5207\u7EBF\u6A21\u5F0F",
         style: {
           border: `1px solid ${theme.rule}`,
           background: tangentMode ? theme.chip : theme.panel,
@@ -523,7 +548,7 @@
           cursor: "pointer"
         }
       },
-      tangentMode ? `Tangents \xB7 ${selectedTangentCount}` : "Tangents"
+      tangentMode ? `\u5207\u7EBF \xB7 ${selectedTangentCount}` : "\u5207\u7EBF"
     )), showTweaks && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
       "button",
       {
@@ -542,10 +567,10 @@
           fontFamily: '"JetBrains Mono", monospace',
           fontSize: 12
         },
-        "aria-label": "Toggle theme tweaks"
+        "aria-label": "\u5207\u6362\u4E3B\u9898\u8C03\u8282\u9762\u677F"
       },
       "\u2726"
-    ), tweaksOpen && /* @__PURE__ */ React.createElement("div", { ref: tweaksRef, className: "tweaks-panel" }, /* @__PURE__ */ React.createElement("h3", null, "Theme"), /* @__PURE__ */ React.createElement("div", { className: "theme-grid" }, Object.entries(window.LOCUS_THEMES).map(([key, t]) => /* @__PURE__ */ React.createElement(
+    ), tweaksOpen && /* @__PURE__ */ React.createElement("div", { ref: tweaksRef, className: "tweaks-panel" }, /* @__PURE__ */ React.createElement("h3", null, "\u4E3B\u9898"), /* @__PURE__ */ React.createElement("div", { className: "theme-grid" }, Object.entries(window.LOCUS_THEMES).map(([key, t]) => /* @__PURE__ */ React.createElement(
       "button",
       {
         key,
@@ -555,7 +580,7 @@
           background: t.bg,
           borderColor: key === themeKey ? theme.ink : "transparent"
         },
-        "aria-label": `Use ${t.name}`
+        "aria-label": `\u4F7F\u7528 ${t.name}`
       },
       /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: 5, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2 } }, t.funcPalette.slice(0, 3).map((color, idx) => /* @__PURE__ */ React.createElement("div", { key: idx, style: { background: color, borderRadius: 2 } })))
     ))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 } }, Object.entries(window.LOCUS_THEMES).map(([key, t]) => /* @__PURE__ */ React.createElement("div", { key, className: "theme-swatch-label" }, t.name)))))));

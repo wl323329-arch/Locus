@@ -28,6 +28,45 @@
   } = window.LocusShared;
   const EXPR_FUNCTION_NAMES = /* @__PURE__ */ new Set(["sin", "cos", "tan", "asin", "acos", "atan", "exp", "ln", "log", "sqrt", "abs", "pow", "sec", "csc", "cot"]);
   const EXPR_CONSTANT_NAMES = /* @__PURE__ */ new Set(["pi", "e", "tau"]);
+  const EXAMPLE_SECTIONS = [
+    {
+      title: "\u57FA\u7840\u66F2\u7EBF",
+      description: "\u5FEB\u901F\u653E\u5165\u5E38\u89C1\u663E\u51FD\u6570\u3002",
+      items: [
+        { label: "\u6B63\u5F26\u66F2\u7EBF", expr: "sin(x)" },
+        { label: "\u629B\u7269\u7EBF", expr: "0.5 * x^2 - 2" },
+        { label: "\u963B\u5C3C\u4F59\u5F26", expr: "cos(x) * e^(-0.1 * x^2)" },
+        { label: "\u4E0A\u534A\u5706", expr: "sqrt(4 - x^2); x in [-2, 2]" }
+      ]
+    },
+    {
+      title: "\u9690\u51FD\u6570",
+      description: "\u5706\u9525\u66F2\u7EBF\u548C\u5173\u7CFB\u5F0F\u653E\u8FD9\u91CC\u3002",
+      items: [
+        { label: "\u5706", expr: "x^2 + y^2 = 9" },
+        { label: "\u629B\u7269\u7EBF", expr: "y^2 = 4x" },
+        { label: "\u53CC\u66F2\u7EBF", expr: "x^2 - y^2 = 4" }
+      ]
+    },
+    {
+      title: "\u53C2\u6570\u4E0E\u6781\u5750\u6807",
+      description: "\u9700\u8981\u53C2\u6570\u6ED1\u5757\u65F6\u4ECE\u8FD9\u7EC4\u5F00\u59CB\u3002",
+      items: [
+        { label: "\u5355\u4F4D\u5706\u53C2\u6570\u5F0F", expr: "x = cos(t); y = sin(t); t in [0, 2*pi]" },
+        { label: "\u6446\u7EBF", expr: "x = t - sin(t); y = 1 - cos(t); t in [0, 4*pi]" },
+        { label: "\u5FC3\u5F62\u7EBF", expr: "r = 1 + a*cos(theta); theta in [0, 2*pi]" }
+      ]
+    },
+    {
+      title: "\u8BED\u6CD5\u901F\u67E5",
+      description: "\u7ED9\u8868\u8FBE\u5F0F\u7F16\u8F91\u5668\u7684\u5E38\u7528\u8BED\u6CD5\u3002",
+      items: [
+        { label: "\u5206\u6BB5\u51FD\u6570", expr: "piecewise(x < 0, -1, x > 1, 1, x)" },
+        { label: "\u51FD\u6570\u540D", expr: "sin cos tan asin acos atan exp ln log sqrt abs pow" },
+        { label: "\u5E38\u91CF\u540D", expr: "pi e tau sec csc cot if" }
+      ]
+    }
+  ];
   function renderExpressionPreview(expr) {
     if (!expr) return null;
     const tokens = [];
@@ -396,41 +435,41 @@
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = theme.bg;
       ctx.fillRect(0, 0, size.w, size.h);
-    const getGridStep = (scale) => {
-      const targetPx = 80;
-      const roughStep = targetPx / Math.max(scale, 1e-6);
-      const pow = Math.pow(10, Math.floor(Math.log10(roughStep)));
-      const normalized = roughStep / pow;
-      if (normalized < 1.5) return pow;
-      if (normalized < 3.5) return 2 * pow;
-      if (normalized < 7.5) return 5 * pow;
-      return 10 * pow;
-    };
-    const stepX = getGridStep(view.scaleX);
-    const stepY = getGridStep(view.scaleY);
-    const minorStepX = stepX / 5;
-    const minorStepY = stepY / 5;
+      const getGridStep = (scale) => {
+        const targetPx = 80;
+        const roughStep = targetPx / Math.max(scale, 1e-6);
+        const pow = Math.pow(10, Math.floor(Math.log10(roughStep)));
+        const normalized = roughStep / pow;
+        if (normalized < 1.5) return pow;
+        if (normalized < 3.5) return 2 * pow;
+        if (normalized < 7.5) return 5 * pow;
+        return 10 * pow;
+      };
+      const stepX = getGridStep(view.scaleX);
+      const stepY = getGridStep(view.scaleY);
+      const minorStepX = stepX / 5;
+      const minorStepY = stepY / 5;
       const { wxMin, wxMax, wyMin, wyMax } = worldBounds;
-    const drawGridLines = (stepHorizontal, stepVertical, color, width) => {
-      ctx.strokeStyle = color;
-      ctx.lineWidth = width;
-      ctx.beginPath();
-      const startX2 = Math.ceil(wxMin / stepHorizontal) * stepHorizontal;
-      for (let x = startX2; x <= wxMax; x += stepHorizontal) {
-        const [sx] = worldToScreen(x, 0);
-        ctx.moveTo(sx + 0.5, 0);
-        ctx.lineTo(sx + 0.5, size.h);
-      }
-      const startY2 = Math.ceil(wyMin / stepVertical) * stepVertical;
-      for (let y = startY2; y <= wyMax; y += stepVertical) {
-        const [, sy] = worldToScreen(0, y);
-        ctx.moveTo(0, sy + 0.5);
-        ctx.lineTo(size.w, sy + 0.5);
-      }
-      ctx.stroke();
-    };
-    drawGridLines(minorStepX, minorStepY, theme.gridMinor, 1);
-    drawGridLines(stepX, stepY, theme.gridMajor, 1);
+      const drawGridLines = (stepHorizontal, stepVertical, color, width) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        const startX2 = Math.ceil(wxMin / stepHorizontal) * stepHorizontal;
+        for (let x = startX2; x <= wxMax; x += stepHorizontal) {
+          const [sx] = worldToScreen(x, 0);
+          ctx.moveTo(sx + 0.5, 0);
+          ctx.lineTo(sx + 0.5, size.h);
+        }
+        const startY2 = Math.ceil(wyMin / stepVertical) * stepVertical;
+        for (let y = startY2; y <= wyMax; y += stepVertical) {
+          const [, sy] = worldToScreen(0, y);
+          ctx.moveTo(0, sy + 0.5);
+          ctx.lineTo(size.w, sy + 0.5);
+        }
+        ctx.stroke();
+      };
+      drawGridLines(minorStepX, minorStepY, theme.gridMinor, 1);
+      drawGridLines(stepX, stepY, theme.gridMajor, 1);
       ctx.strokeStyle = theme.axis;
       ctx.lineWidth = 1.25;
       ctx.beginPath();
@@ -449,29 +488,29 @@
       ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-    const fmtTick = (v, step) => {
-      if (Math.abs(v) < 1e-10) return "0";
-      const abs = Math.abs(v);
-      if (abs >= 1e5 || abs < 1e-3) return v.toExponential(1);
-      const digits = step < 1 ? Math.max(0, -Math.floor(Math.log10(step))) : 0;
-      return v.toFixed(digits);
-    };
-    const startX = Math.ceil(wxMin / stepX) * stepX;
-    for (let x = startX; x <= wxMax; x += stepX) {
-      if (Math.abs(x) < stepX * 1e-3) continue;
-      const [sx] = worldToScreen(x, 0);
-      const yLabel = Math.max(4, Math.min(size.h - 16, ax0Y + 4));
-      ctx.fillText(fmtTick(x, stepX), sx, yLabel);
-    }
-    ctx.textAlign = "right";
-    ctx.textBaseline = "middle";
-    const startY = Math.ceil(wyMin / stepY) * stepY;
-    for (let y = startY; y <= wyMax; y += stepY) {
-      if (Math.abs(y) < stepY * 1e-3) continue;
-      const [, sy] = worldToScreen(0, y);
-      const xLabel = Math.max(24, Math.min(size.w - 4, ax0X - 6));
-      ctx.fillText(fmtTick(y, stepY), xLabel, sy);
-    }
+      const fmtTick = (v, step) => {
+        if (Math.abs(v) < 1e-10) return "0";
+        const abs = Math.abs(v);
+        if (abs >= 1e5 || abs < 1e-3) return v.toExponential(1);
+        const digits = step < 1 ? Math.max(0, -Math.floor(Math.log10(step))) : 0;
+        return v.toFixed(digits);
+      };
+      const startX = Math.ceil(wxMin / stepX) * stepX;
+      for (let x = startX; x <= wxMax; x += stepX) {
+        if (Math.abs(x) < stepX * 1e-3) continue;
+        const [sx] = worldToScreen(x, 0);
+        const yLabel = Math.max(4, Math.min(size.h - 16, ax0Y + 4));
+        ctx.fillText(fmtTick(x, stepX), sx, yLabel);
+      }
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      const startY = Math.ceil(wyMin / stepY) * stepY;
+      for (let y = startY; y <= wyMax; y += stepY) {
+        if (Math.abs(y) < stepY * 1e-3) continue;
+        const [, sy] = worldToScreen(0, y);
+        const xLabel = Math.max(24, Math.min(size.w - 4, ax0X - 6));
+        ctx.fillText(fmtTick(y, stepY), xLabel, sy);
+      }
       if (ax0X >= 0 && ax0X <= size.w && ax0Y >= 0 && ax0Y <= size.h) {
         ctx.textAlign = "right";
         ctx.textBaseline = "top";
@@ -758,11 +797,11 @@
       if (draggingRef.current) {
         const dx = e.clientX - draggingRef.current.x;
         const dy = e.clientY - draggingRef.current.y;
-      setView({
-        ...draggingRef.current.view,
-        cx: draggingRef.current.view.cx - dx / draggingRef.current.view.scaleX,
-        cy: draggingRef.current.view.cy + dy / draggingRef.current.view.scaleY
-      });
+        setView({
+          ...draggingRef.current.view,
+          cx: draggingRef.current.view.cx - dx / draggingRef.current.view.scaleX,
+          cy: draggingRef.current.view.cy + dy / draggingRef.current.view.scaleY
+        });
         setMouse(null);
         return;
       }
@@ -772,34 +811,34 @@
       draggingRef.current = null;
       tangentDragRef.current = null;
     };
-  const onMouseLeave = () => {
-    draggingRef.current = null;
-    tangentDragRef.current = null;
-    setMouse(null);
-  };
-  const zoomAroundPoint = useCallback((baseView, screenX, screenY, factorX, factorY) => {
-    const sourceView = sanitizeView(baseView);
-    const wxBefore = sourceView.cx + (screenX - size.w / 2) / sourceView.scaleX;
-    const wyBefore = sourceView.cy - (screenY - size.h / 2) / sourceView.scaleY;
-    const scaleX = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, sourceView.scaleX * factorX));
-    const scaleY = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, sourceView.scaleY * factorY));
-    setView({
-      cx: wxBefore - (screenX - size.w / 2) / scaleX,
-      cy: wyBefore + (screenY - size.h / 2) / scaleY,
-      scaleX,
-      scaleY
-    });
-  }, [setView, size.h, size.w]);
-  const onWheel = (e) => {
-    e.preventDefault();
-    const rect = canvasRef.current.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const factor = Math.exp(-e.deltaY * 15e-4);
-    const xOnly = e.shiftKey && !e.altKey;
-    const yOnly = e.altKey && !e.shiftKey;
-    zoomAroundPoint(view, mx, my, xOnly ? factor : yOnly ? 1 : factor, yOnly ? factor : xOnly ? 1 : factor);
-  };
+    const onMouseLeave = () => {
+      draggingRef.current = null;
+      tangentDragRef.current = null;
+      setMouse(null);
+    };
+    const zoomAroundPoint = useCallback((baseView, screenX, screenY, factorX, factorY) => {
+      const sourceView = sanitizeView(baseView);
+      const wxBefore = sourceView.cx + (screenX - size.w / 2) / sourceView.scaleX;
+      const wyBefore = sourceView.cy - (screenY - size.h / 2) / sourceView.scaleY;
+      const scaleX = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, sourceView.scaleX * factorX));
+      const scaleY = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, sourceView.scaleY * factorY));
+      setView({
+        cx: wxBefore - (screenX - size.w / 2) / scaleX,
+        cy: wyBefore + (screenY - size.h / 2) / scaleY,
+        scaleX,
+        scaleY
+      });
+    }, [setView, size.h, size.w]);
+    const onWheel = (e) => {
+      e.preventDefault();
+      const rect = canvasRef.current.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const factor = Math.exp(-e.deltaY * 15e-4);
+      const xOnly = e.shiftKey && !e.altKey;
+      const yOnly = e.altKey && !e.shiftKey;
+      zoomAroundPoint(view, mx, my, xOnly ? factor : yOnly ? 1 : factor, yOnly ? factor : xOnly ? 1 : factor);
+    };
     const onTouchStart = (e) => {
       const rect = canvasRef.current.getBoundingClientRect();
       if (e.touches.length === 1) {
@@ -811,13 +850,13 @@
         draggingRef.current = null;
         const [t1, t2] = e.touches;
         const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      pinchRef.current = {
-        dist,
-        scaleX: view.scaleX,
-        scaleY: view.scaleY,
-        cx: view.cx,
-        cy: view.cy,
-        midX: (t1.clientX + t2.clientX) / 2 - rect.left,
+        pinchRef.current = {
+          dist,
+          scaleX: view.scaleX,
+          scaleY: view.scaleY,
+          cx: view.cx,
+          cy: view.cy,
+          midX: (t1.clientX + t2.clientX) / 2 - rect.left,
           midY: (t1.clientY + t2.clientY) / 2 - rect.top
         };
         setMouse(null);
@@ -830,25 +869,25 @@
         const t = e.touches[0];
         const dx = t.clientX - draggingRef.current.x;
         const dy = t.clientY - draggingRef.current.y;
-      setView({
-        ...draggingRef.current.view,
-        cx: draggingRef.current.view.cx - dx / draggingRef.current.view.scaleX,
-        cy: draggingRef.current.view.cy + dy / draggingRef.current.view.scaleY
-      });
-      setMouse({ x: t.clientX - rect.left, y: t.clientY - rect.top });
-    } else if (e.touches.length === 2 && pinchRef.current) {
-      const [t1, t2] = e.touches;
-      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      const factor = dist / pinchRef.current.dist;
-      zoomAroundPoint(
-        pinchRef.current,
-        pinchRef.current.midX,
-        pinchRef.current.midY,
-        factor,
-        factor
-      );
-    }
-  };
+        setView({
+          ...draggingRef.current.view,
+          cx: draggingRef.current.view.cx - dx / draggingRef.current.view.scaleX,
+          cy: draggingRef.current.view.cy + dy / draggingRef.current.view.scaleY
+        });
+        setMouse({ x: t.clientX - rect.left, y: t.clientY - rect.top });
+      } else if (e.touches.length === 2 && pinchRef.current) {
+        const [t1, t2] = e.touches;
+        const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const factor = dist / pinchRef.current.dist;
+        zoomAroundPoint(
+          pinchRef.current,
+          pinchRef.current.midX,
+          pinchRef.current.midY,
+          factor,
+          factor
+        );
+      }
+    };
     const onTouchEnd = (e) => {
       if (e.touches.length === 0) {
         draggingRef.current = null;
@@ -870,7 +909,7 @@
         onTouchEnd,
         onTouchCancel: onTouchEnd,
         style: { display: "block", cursor: draggingRef.current || tangentDragRef.current ? "grabbing" : "crosshair" },
-        "aria-label": "Function plot canvas"
+        "aria-label": "\u51FD\u6570\u7ED8\u56FE\u753B\u5E03"
       }
     ));
   }
@@ -914,8 +953,8 @@
             e.stopPropagation();
             onChange({ ...fn, visible: !fn.visible });
           },
-          title: fn.visible ? "Hide" : "Show",
-          "aria-label": fn.visible ? `Hide ${label}` : `Show ${label}`,
+          title: fn.visible ? "\u9690\u85CF" : "\u663E\u793A",
+          "aria-label": fn.visible ? `\u9690\u85CF ${label}` : `\u663E\u793A ${label}`,
           style: {
             width: 36,
             border: "none",
@@ -957,8 +996,8 @@
               setEditing(false);
             }
           },
-          placeholder: "e.g. y = sin(x); x in [-pi, pi]",
-          "aria-label": `Expression for ${label}`,
+          placeholder: "\u4F8B\u5982\uFF1Ay = sin(x); x in [-pi, pi]",
+          "aria-label": `${label} \u7684\u8868\u8FBE\u5F0F`,
           style: {
             width: "100%",
             border: "none",
@@ -993,7 +1032,7 @@
             textUnderlineOffset: 3
           }
         },
-        fn.expr ? hasError ? fn.expr : /* @__PURE__ */ React.createElement("span", { className: "expr-preview" }, renderExpressionPreview(fn.expr)) : /* @__PURE__ */ React.createElement("span", { style: { color: theme.muted } }, "click to enter an expression\u2026")
+        fn.expr ? hasError ? fn.expr : /* @__PURE__ */ React.createElement("span", { className: "expr-preview" }, renderExpressionPreview(fn.expr)) : /* @__PURE__ */ React.createElement("span", { style: { color: theme.muted } }, "\u70B9\u51FB\u8F93\u5165\u8868\u8FBE\u5F0F\u2026")
       ), hasError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: "#c94a3a", marginTop: 3, fontFamily: '"JetBrains Mono", monospace' } }, fn.error), selected && /* @__PURE__ */ React.createElement("div", { style: {
         marginTop: 6,
         fontFamily: '"JetBrains Mono", monospace',
@@ -1001,7 +1040,7 @@
         color: fn.color,
         letterSpacing: "0.08em",
         textTransform: "uppercase"
-      } }, "selected")),
+      } }, "\u5DF2\u9009\u4E2D")),
       !isOnly && /* @__PURE__ */ React.createElement(
         "button",
         {
@@ -1009,8 +1048,8 @@
             e.stopPropagation();
             onDelete();
           },
-          title: "Remove",
-          "aria-label": `Remove ${label}`,
+          title: "\u5220\u9664",
+          "aria-label": `\u5220\u9664 ${label}`,
           style: {
             width: 32,
             border: "none",
@@ -1052,6 +1091,115 @@
       },
       children
     );
+  }
+  function ExamplesPage({ theme, onBack, onApplyExample }) {
+    return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } }, /* @__PURE__ */ React.createElement("div", { style: {
+      padding: "14px 16px 10px 16px",
+      borderBottom: `1px solid ${theme.rule}`,
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    } }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        onClick: onBack,
+        title: "\u8FD4\u56DE\u51FD\u6570\u5217\u8868",
+        style: {
+          width: 28,
+          height: 28,
+          border: `1px solid ${theme.rule}`,
+          background: "transparent",
+          borderRadius: 999,
+          cursor: "pointer",
+          color: theme.ink,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0
+        }
+      },
+      /* @__PURE__ */ React.createElement(ChevronLeft, null)
+    ), /* @__PURE__ */ React.createElement("div", { style: { minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: {
+      fontFamily: '"JetBrains Mono", monospace',
+      fontSize: 10,
+      color: theme.muted,
+      letterSpacing: "0.1em"
+    } }, "\u793A\u4F8B"), /* @__PURE__ */ React.createElement("div", { style: {
+      marginTop: 4,
+      fontFamily: "Inter, sans-serif",
+      fontSize: 13,
+      fontWeight: 600,
+      color: theme.ink
+    } }, "\u793A\u4F8B\u4E0E\u8BED\u6CD5"))), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, overflowY: "auto", padding: "14px 16px 18px 16px" } }, /* @__PURE__ */ React.createElement("div", { style: {
+      padding: "12px 14px",
+      borderRadius: 18,
+      background: theme.chip,
+      border: `1px solid ${theme.rule}`,
+      color: theme.muted,
+      fontFamily: '"JetBrains Mono", monospace',
+      fontSize: 10,
+      lineHeight: 1.7,
+      marginBottom: 14
+    } }, "\u70B9\u51FB\u6761\u76EE\u4F1A\u4F18\u5148\u586B\u5165\u5F53\u524D\u9009\u4E2D\u7684\u7A7A\u51FD\u6570\uFF1B\u5F53\u524D\u51FD\u6570\u5DF2\u5199\u5185\u5BB9\u65F6\uFF0C\u4F1A\u65B0\u589E\u4E00\u6761\u51FD\u6570\u3002"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 12 } }, EXAMPLE_SECTIONS.map((section) => /* @__PURE__ */ React.createElement(
+      "section",
+      {
+        key: section.title,
+        className: "examples-card",
+        style: {
+          borderRadius: 20,
+          padding: "14px 14px 12px 14px",
+          background: theme.panel,
+          border: `1px solid ${theme.rule}`,
+          boxShadow: `0 14px 30px ${theme.shadow}`
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", { style: {
+        fontFamily: "Inter, sans-serif",
+        fontSize: 13,
+        fontWeight: 600,
+        color: theme.ink
+      } }, section.title),
+      /* @__PURE__ */ React.createElement("div", { style: {
+        marginTop: 4,
+        color: theme.muted,
+        fontFamily: '"JetBrains Mono", monospace',
+        fontSize: 10,
+        lineHeight: 1.6
+      } }, section.description),
+      /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 8, marginTop: 12 } }, section.items.map((item) => /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          key: `${section.title}:${item.label}`,
+          className: "example-item",
+          onClick: () => onApplyExample(item.expr),
+          title: `\u63D2\u5165 ${item.label}`,
+          style: {
+            width: "100%",
+            textAlign: "left",
+            padding: "10px 12px",
+            borderRadius: 16,
+            border: `1px solid ${theme.rule}`,
+            background: theme.bg,
+            cursor: "pointer",
+            color: theme.ink
+          }
+        },
+        /* @__PURE__ */ React.createElement("div", { style: {
+          fontFamily: "Inter, sans-serif",
+          fontSize: 12,
+          fontWeight: 600,
+          color: theme.ink
+        } }, item.label),
+        /* @__PURE__ */ React.createElement("div", { style: {
+          marginTop: 5,
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: 10,
+          lineHeight: 1.6,
+          color: theme.muted,
+          wordBreak: "break-word"
+        } }, item.expr)
+      )))
+    )))));
   }
   function ParameterControl({ name, config, theme, onChange }) {
     const apply = (patch) => onChange(name, patch);
@@ -1120,9 +1268,11 @@
     onSelectFunction,
     parameterNames,
     parameterConfig,
-    onParameterChange
+    onParameterChange,
+    onApplyExample
   }) {
     const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+    const [panelPage, setPanelPage] = useState("functions");
     const themeMenuRef = useRef(null);
     const addFn = () => {
       const palette = theme.funcPalette;
@@ -1190,13 +1340,12 @@
       fontSize: 10,
       color: theme.muted,
       marginTop: 3,
-      letterSpacing: "0.08em",
-      textTransform: "uppercase"
-    } }, "function plotter")), /* @__PURE__ */ React.createElement("div", { ref: themeMenuRef, style: { position: "relative" } }, /* @__PURE__ */ React.createElement(
+      letterSpacing: "0.08em"
+    } }, "\u51FD\u6570\u7ED8\u56FE\u53F0")), /* @__PURE__ */ React.createElement("div", { ref: themeMenuRef, style: { position: "relative" } }, /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: () => setThemeMenuOpen((v) => !v),
-        title: "Theme",
+        title: "\u4E3B\u9898",
         style: {
           display: "flex",
           alignItems: "center",
@@ -1232,9 +1381,8 @@
       fontSize: 10,
       color: theme.muted,
       letterSpacing: "0.1em",
-      textTransform: "uppercase",
       marginBottom: 8
-    } }, "Theme"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 } }, Object.entries(window.LOCUS_THEMES).map(([key, t]) => {
+    } }, "\u4E3B\u9898"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 } }, Object.entries(window.LOCUS_THEMES).map(([key, t]) => {
       const active = themeKey === key;
       return /* @__PURE__ */ React.createElement(
         "button",
@@ -1274,7 +1422,7 @@
       "button",
       {
         onClick: onCollapse,
-        title: "Collapse sidebar",
+        title: "\u6536\u8D77\u4FA7\u680F",
         style: {
           width: 28,
           height: 28,
@@ -1289,7 +1437,7 @@
         }
       },
       /* @__PURE__ */ React.createElement(ChevronLeft, null)
-    )), /* @__PURE__ */ React.createElement("div", { style: {
+    )), panelPage === "functions" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: {
       display: "flex",
       alignItems: "center",
       justifyContent: "space-between",
@@ -1298,13 +1446,12 @@
       fontFamily: '"JetBrains Mono", monospace',
       fontSize: 10,
       color: theme.muted,
-      letterSpacing: "0.1em",
-      textTransform: "uppercase"
-    } }, "Functions \xB7 ", functions.length), /* @__PURE__ */ React.createElement(
+      letterSpacing: "0.1em"
+    } }, "\u51FD\u6570 \xB7 ", functions.length), /* @__PURE__ */ React.createElement(
       "button",
       {
         onClick: addFn,
-        title: "Add function",
+        title: "\u65B0\u589E\u51FD\u6570",
         style: {
           display: "flex",
           alignItems: "center",
@@ -1322,7 +1469,7 @@
         onMouseLeave: (e) => e.currentTarget.style.borderColor = theme.rule
       },
       /* @__PURE__ */ React.createElement(PlusIcon, null),
-      " Add"
+      " \u65B0\u589E"
     )), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, overflowY: "auto", borderTop: `1px solid ${theme.rule}` } }, functions.map((fn, i) => /* @__PURE__ */ React.createElement(
       FunctionRow,
       {
@@ -1335,14 +1482,13 @@
         selected: fn.id === selectedFunctionId,
         onSelect: () => onSelectFunction(fn.id)
       }
-    )), functions.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", color: theme.muted, fontSize: 12 } }, "No functions yet. Add one to get started."), parameterNames.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { borderTop: `1px solid ${theme.rule}`, marginTop: 8 } }, /* @__PURE__ */ React.createElement("div", { style: {
+    )), functions.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", color: theme.muted, fontSize: 12 } }, "\u8FD8\u6CA1\u6709\u51FD\u6570\uFF0C\u5148\u65B0\u589E\u4E00\u6761\u5F00\u59CB\u3002"), parameterNames.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { borderTop: `1px solid ${theme.rule}`, marginTop: 8 } }, /* @__PURE__ */ React.createElement("div", { style: {
       padding: "12px 16px 8px 16px",
       fontFamily: '"JetBrains Mono", monospace',
       fontSize: 10,
       color: theme.muted,
-      letterSpacing: "0.08em",
-      textTransform: "uppercase"
-    } }, "Parameters"), parameterNames.map((name) => /* @__PURE__ */ React.createElement(
+      letterSpacing: "0.08em"
+    } }, "\u53C2\u6570"), parameterNames.map((name) => /* @__PURE__ */ React.createElement(
       ParameterControl,
       {
         key: name,
@@ -1352,14 +1498,69 @@
         onChange: onParameterChange
       }
     ))), /* @__PURE__ */ React.createElement("div", { style: {
-      padding: "12px 16px 16px 16px",
-      fontFamily: '"JetBrains Mono", monospace',
-      fontSize: 10,
-      color: theme.muted,
-      lineHeight: 1.6,
+      padding: "14px 16px 18px 16px",
       borderTop: `1px dashed ${theme.rule}`,
       marginTop: 8
-    } }, /* @__PURE__ */ React.createElement("div", { style: { letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 } }, "Reference"), /* @__PURE__ */ React.createElement("div", null, "y = sin(x) \xB7 y = 0.5*x^2 - 2"), /* @__PURE__ */ React.createElement("div", null, "x^2 + y^2 = 9 \xB7 y^2 = 4x"), /* @__PURE__ */ React.createElement("div", null, "x = cos(t); y = sin(t); t in [0, 2*pi]"), /* @__PURE__ */ React.createElement("div", null, "r = 1 + a*cos(theta); theta in [0, 2*pi]"), /* @__PURE__ */ React.createElement("div", null, "piecewise(x < 0, -1, x > 1, 1, x)"), /* @__PURE__ */ React.createElement("div", null, "y = sqrt(4 - x^2); x in [-2, 2]"), /* @__PURE__ */ React.createElement("div", null, "sin \xB7 cos \xB7 tan \xB7 asin \xB7 acos \xB7 atan"), /* @__PURE__ */ React.createElement("div", null, "exp \xB7 ln \xB7 log \xB7 sqrt \xB7 abs \xB7 pow"), /* @__PURE__ */ React.createElement("div", null, "pi \xB7 e \xB7 tau \xB7 sec \xB7 csc \xB7 cot \xB7 if"))), /* @__PURE__ */ React.createElement("div", { style: { borderTop: `1px solid ${theme.rule}` } }, /* @__PURE__ */ React.createElement("div", { style: {
+    } }, /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        className: "examples-entry",
+        onClick: () => setPanelPage("examples"),
+        title: "\u6253\u5F00\u793A\u4F8B\u9875",
+        style: {
+          width: "100%",
+          textAlign: "left",
+          padding: "14px 16px",
+          borderRadius: 22,
+          border: `1px solid ${theme.rule}`,
+          background: theme.chip,
+          cursor: "pointer",
+          boxShadow: `0 16px 32px ${theme.shadow}`
+        }
+      },
+      /* @__PURE__ */ React.createElement("div", { style: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12
+      } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: {
+        fontFamily: '"JetBrains Mono", monospace',
+        fontSize: 10,
+        color: theme.muted,
+        letterSpacing: "0.08em"
+      } }, "\u793A\u4F8B"), /* @__PURE__ */ React.createElement("div", { style: {
+        marginTop: 5,
+        fontFamily: "Inter, sans-serif",
+        fontSize: 13,
+        fontWeight: 600,
+        color: theme.ink
+      } }, "\u793A\u4F8B\u4E0E\u8BED\u6CD5\u6536\u7EB3\u9875")), /* @__PURE__ */ React.createElement("div", { className: "examples-entry-arrow", style: {
+        width: 28,
+        height: 28,
+        borderRadius: 999,
+        border: `1px solid ${theme.rule}`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: theme.ink,
+        flexShrink: 0,
+        background: theme.panel
+      } }, /* @__PURE__ */ React.createElement(ChevronRight, null))),
+      /* @__PURE__ */ React.createElement("div", { style: {
+        marginTop: 9,
+        fontFamily: '"JetBrains Mono", monospace',
+        fontSize: 10,
+        lineHeight: 1.7,
+        color: theme.muted
+      } }, "\u5E38\u7528\u66F2\u7EBF\u3001\u9690\u51FD\u6570\u3001\u53C2\u6570\u5F0F\u548C\u8BED\u6CD5\u901F\u67E5\u5DF2\u7ECF\u79FB\u5230\u5355\u72EC\u9875\u9762\u3002")
+    )))) : /* @__PURE__ */ React.createElement(
+      ExamplesPage,
+      {
+        theme,
+        onBack: () => setPanelPage("functions"),
+        onApplyExample
+      }
+    ), /* @__PURE__ */ React.createElement("div", { style: { borderTop: `1px solid ${theme.rule}` } }, /* @__PURE__ */ React.createElement("div", { style: {
       padding: "10px 16px",
       borderBottom: `1px solid ${theme.rule}`,
       fontFamily: '"JetBrains Mono", monospace',
@@ -1367,14 +1568,13 @@
       minHeight: 38,
       display: "flex",
       alignItems: "center"
-    } }, traceInfo ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { width: 8, height: 8, borderRadius: 8, background: traceInfo.fn.color } }), traceInfo.fn.label && /* @__PURE__ */ React.createElement("span", { style: { color: theme.ink, fontWeight: 600 } }, traceInfo.kind === "intersection" ? `${traceInfo.fn.label} \u2229 ${traceInfo.label2 || ""}` : traceInfo.kind && traceInfo.kind !== "curve" ? `${traceInfo.fn.label} \xB7 ${traceInfo.kind}` : traceInfo.fn.label), /* @__PURE__ */ React.createElement("span", { style: { color: theme.muted } }, "x"), /* @__PURE__ */ React.createElement("span", { style: { color: theme.ink } }, formatCoordinateValue(traceInfo.x, coordMode)), /* @__PURE__ */ React.createElement("span", { style: { color: theme.muted, marginLeft: 6 } }, "y"), /* @__PURE__ */ React.createElement("span", { style: { color: theme.ink } }, formatCoordinateValue(traceInfo.y, coordMode))) : /* @__PURE__ */ React.createElement("div", { style: { color: theme.muted, fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase" } }, "hover any curve to trace")), /* @__PURE__ */ React.createElement("div", { style: {
+    } }, traceInfo ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { width: 8, height: 8, borderRadius: 8, background: traceInfo.fn.color } }), traceInfo.fn.label && /* @__PURE__ */ React.createElement("span", { style: { color: theme.ink, fontWeight: 600 } }, traceInfo.kind === "intersection" ? `${traceInfo.fn.label} \u2229 ${traceInfo.label2 || ""}` : traceInfo.kind && traceInfo.kind !== "curve" ? `${traceInfo.fn.label} \xB7 ${traceInfo.kind}` : traceInfo.fn.label), /* @__PURE__ */ React.createElement("span", { style: { color: theme.muted } }, "x"), /* @__PURE__ */ React.createElement("span", { style: { color: theme.ink } }, formatCoordinateValue(traceInfo.x, coordMode)), /* @__PURE__ */ React.createElement("span", { style: { color: theme.muted, marginLeft: 6 } }, "y"), /* @__PURE__ */ React.createElement("span", { style: { color: theme.ink } }, formatCoordinateValue(traceInfo.y, coordMode))) : /* @__PURE__ */ React.createElement("div", { style: { color: theme.muted, fontSize: 10, letterSpacing: "0.08em" } }, "\u60AC\u505C\u66F2\u7EBF\u67E5\u770B\u5750\u6807")), /* @__PURE__ */ React.createElement("div", { style: {
       padding: "8px 16px 0 16px",
       color: theme.muted,
       fontFamily: '"JetBrains Mono", monospace',
       fontSize: 10,
-      letterSpacing: "0.08em",
-      textTransform: "uppercase"
-    } }, "X scale ", formatDecimalNumber(view.scaleX), " \xB7 Y scale ", formatDecimalNumber(view.scaleY)), /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 16px 12px 16px", display: "flex", gap: 6, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1.4, 1.4) }, "Zoom +"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1 / 1.4, 1 / 1.4) }, "Zoom \u2212"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1.4, 1), title: "Expand the x-axis only" }, "X +"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1 / 1.4, 1), title: "Compress the x-axis only" }, "X \u2212"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1, 1.4), title: "Expand the y-axis only" }, "Y +"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1, 1 / 1.4), title: "Compress the y-axis only" }, "Y \u2212"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: onFitView }, "Fit data"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: resetView }, "Reset"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: onExport }, "Export PNG"))));
+      letterSpacing: "0.08em"
+    } }, "X \u7F29\u653E ", formatDecimalNumber(view.scaleX), " \xB7 Y \u7F29\u653E ", formatDecimalNumber(view.scaleY)), /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 16px 12px 16px", display: "flex", gap: 6, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1.4, 1.4) }, "\u653E\u5927"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1 / 1.4, 1 / 1.4) }, "\u7F29\u5C0F"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1.4, 1), title: "\u4EC5\u62C9\u4F38 X \u8F74" }, "X \u62C9\u4F38"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1 / 1.4, 1), title: "\u4EC5\u538B\u7F29 X \u8F74" }, "X \u538B\u7F29"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1, 1.4), title: "\u4EC5\u62C9\u4F38 Y \u8F74" }, "Y \u62C9\u4F38"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1, 1 / 1.4), title: "\u4EC5\u538B\u7F29 Y \u8F74" }, "Y \u538B\u7F29"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: onFitView }, "\u9002\u914D\u6570\u636E"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: resetView }, "\u91CD\u7F6E"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: onExport }, "\u5BFC\u51FA PNG"))));
   }
   function CollapsedRailInner({ functions, theme, onExpand, onToggleVisibility }) {
     return /* @__PURE__ */ React.createElement("div", { style: {
@@ -1389,8 +1589,8 @@
       "button",
       {
         onClick: onExpand,
-        title: "Expand sidebar",
-        "aria-label": "Expand sidebar",
+        title: "\u5C55\u5F00\u4FA7\u680F",
+        "aria-label": "\u5C55\u5F00\u4FA7\u680F",
         style: {
           width: 32,
           height: 32,
@@ -1419,8 +1619,8 @@
       {
         key: fn.id,
         onClick: () => onToggleVisibility(fn.id),
-        title: `${fn.label || "f"}(x) = ${fn.expr || "\u2014"}  \xB7  click to ${fn.visible ? "hide" : "show"}`,
-        "aria-label": `${fn.visible ? "Hide" : "Show"} ${fn.label || "function"}`,
+        title: `${fn.label || "f"} = ${fn.expr || "\u2014"} \xB7 \u70B9\u51FB${fn.visible ? "\u9690\u85CF" : "\u663E\u793A"}`,
+        "aria-label": `${fn.visible ? "\u9690\u85CF" : "\u663E\u793A"} ${fn.label || "\u51FD\u6570"}`,
         style: {
           width: 18,
           height: 18,
@@ -1490,7 +1690,7 @@
         {
           className: "resize-handle",
           onMouseDown: onResizeStart,
-          title: "Drag to resize",
+          title: "\u62D6\u52A8\u8C03\u6574\u5BBD\u5EA6",
           style: {
             position: "absolute",
             top: 0,

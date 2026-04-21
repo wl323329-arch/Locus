@@ -528,33 +528,33 @@
 
 window.LOCUS_THEMES = {
   linen: {
-    name: 'Linen', bg: '#f7f5f0', panel: '#fbfaf6', ink: '#1a1917', muted: '#6d6a62',
-    rule: '#e6e2d7', ruleStrong: '#c9c3b2', gridMinor: '#ebe6d9', gridMajor: '#d4ccba',
-    axis: '#3a3732', accent: '#1a1917', chip: '#efece3',
+    name: '月白', bg: 'rgba(235, 242, 251, 0.9)', panel: 'rgba(255, 255, 255, 0.34)', ink: '#182235', muted: 'rgba(24, 34, 53, 0.58)',
+    rule: 'rgba(255, 255, 255, 0.48)', ruleStrong: 'rgba(124, 147, 187, 0.42)', gridMinor: 'rgba(124, 150, 193, 0.12)', gridMajor: 'rgba(95, 122, 171, 0.22)',
+    axis: 'rgba(31, 46, 73, 0.72)', accent: '#2d6cdf', chip: 'rgba(255, 255, 255, 0.58)',
     funcPalette: ['oklch(62% 0.16 25)', 'oklch(62% 0.16 145)', 'oklch(62% 0.16 240)', 'oklch(62% 0.16 310)', 'oklch(62% 0.16 75)', 'oklch(62% 0.16 195)'],
   },
   graphite: {
-    name: 'Graphite', bg: '#131416', panel: '#1a1b1e', ink: '#ecebe7', muted: '#8a8a84',
-    rule: '#272829', ruleStrong: '#3a3b3d', gridMinor: '#212224', gridMajor: '#2e2f31',
-    axis: '#9a9a94', accent: '#ecebe7', chip: '#232427',
+    name: '曜石', bg: 'rgba(18, 22, 31, 0.94)', panel: 'rgba(24, 29, 41, 0.5)', ink: '#eef3ff', muted: 'rgba(238, 243, 255, 0.6)',
+    rule: 'rgba(255, 255, 255, 0.1)', ruleStrong: 'rgba(143, 167, 214, 0.34)', gridMinor: 'rgba(107, 128, 170, 0.12)', gridMajor: 'rgba(151, 177, 226, 0.18)',
+    axis: 'rgba(234, 240, 255, 0.72)', accent: '#8cb4ff', chip: 'rgba(255, 255, 255, 0.12)',
     funcPalette: ['oklch(72% 0.17 25)', 'oklch(72% 0.17 145)', 'oklch(72% 0.17 240)', 'oklch(72% 0.17 310)', 'oklch(72% 0.17 75)', 'oklch(72% 0.17 195)'],
   },
   blueprint: {
-    name: 'Blueprint', bg: '#0f2a3f', panel: '#143348', ink: '#e8f1f7', muted: '#9cbbd0',
-    rule: '#1e4560', ruleStrong: '#2c597a', gridMinor: '#1b3f58', gridMajor: '#2a567a',
-    axis: '#c5dae8', accent: '#ffffff', chip: '#1a3d57',
+    name: '深海', bg: 'rgba(18, 42, 65, 0.92)', panel: 'rgba(31, 60, 87, 0.42)', ink: '#edf7ff', muted: 'rgba(237, 247, 255, 0.62)',
+    rule: 'rgba(162, 210, 255, 0.16)', ruleStrong: 'rgba(136, 195, 255, 0.34)', gridMinor: 'rgba(124, 178, 228, 0.12)', gridMajor: 'rgba(147, 201, 255, 0.2)',
+    axis: 'rgba(233, 245, 255, 0.78)', accent: '#7fd3ff', chip: 'rgba(214, 239, 255, 0.14)',
     funcPalette: ['oklch(80% 0.14 60)', 'oklch(80% 0.14 150)', 'oklch(80% 0.14 320)', 'oklch(80% 0.14 200)', 'oklch(80% 0.14 30)', 'oklch(80% 0.14 260)'],
   },
   paper: {
-    name: 'Paper', bg: '#fefdf9', panel: '#fffffc', ink: '#2a2520', muted: '#7a7366',
-    rule: '#ebe6d9', ruleStrong: '#d0c9b6', gridMinor: '#f1ecde', gridMajor: '#ddd4bf',
-    axis: '#4a4238', accent: '#b8471f', chip: '#f3eedf',
+    name: '素笺', bg: 'rgba(252, 249, 244, 0.92)', panel: 'rgba(255, 252, 247, 0.44)', ink: '#2b251f', muted: 'rgba(43, 37, 31, 0.58)',
+    rule: 'rgba(255, 255, 255, 0.5)', ruleStrong: 'rgba(183, 153, 126, 0.34)', gridMinor: 'rgba(202, 180, 155, 0.1)', gridMajor: 'rgba(180, 153, 120, 0.18)',
+    axis: 'rgba(68, 57, 45, 0.76)', accent: '#ca6b2d', chip: 'rgba(255, 252, 247, 0.62)',
     funcPalette: ['oklch(55% 0.15 30)', 'oklch(55% 0.13 160)', 'oklch(55% 0.15 255)', 'oklch(55% 0.15 300)', 'oklch(60% 0.12 90)', 'oklch(55% 0.14 210)'],
   },
   sunrise: {
-    name: 'Sunrise', bg: '#fff8f0', panel: '#ffffff', ink: '#241712', muted: '#7a5f52',
-    rule: '#f1e4d4', ruleStrong: '#d9c3aa', gridMinor: '#f6eadb', gridMajor: '#e4cdb2',
-    axis: '#3a2419', accent: '#d94a1f', chip: '#f8ecdc',
+    name: '朝霞', bg: 'rgba(255, 244, 237, 0.92)', panel: 'rgba(255, 252, 249, 0.38)', ink: '#2b1a16', muted: 'rgba(43, 26, 22, 0.58)',
+    rule: 'rgba(255, 255, 255, 0.46)', ruleStrong: 'rgba(224, 154, 122, 0.36)', gridMinor: 'rgba(232, 161, 132, 0.1)', gridMajor: 'rgba(221, 144, 113, 0.18)',
+    axis: 'rgba(72, 35, 23, 0.78)', accent: '#ea7044', chip: 'rgba(255, 249, 245, 0.58)',
     funcPalette: ['oklch(65% 0.20 30)', 'oklch(65% 0.18 140)', 'oklch(65% 0.18 260)', 'oklch(65% 0.20 340)', 'oklch(70% 0.17 90)', 'oklch(65% 0.18 200)'],
   },
 };

@@ -28,6 +28,45 @@ const {
 
 const EXPR_FUNCTION_NAMES = new Set(['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'exp', 'ln', 'log', 'sqrt', 'abs', 'pow', 'sec', 'csc', 'cot']);
 const EXPR_CONSTANT_NAMES = new Set(['pi', 'e', 'tau']);
+const EXAMPLE_SECTIONS = [
+  {
+    title: '基础曲线',
+    description: '快速放入常见显函数。',
+    items: [
+      { label: '正弦曲线', expr: 'sin(x)' },
+      { label: '抛物线', expr: '0.5 * x^2 - 2' },
+      { label: '阻尼余弦', expr: 'cos(x) * e^(-0.1 * x^2)' },
+      { label: '上半圆', expr: 'sqrt(4 - x^2); x in [-2, 2]' },
+    ],
+  },
+  {
+    title: '隐函数',
+    description: '圆锥曲线和关系式放这里。',
+    items: [
+      { label: '圆', expr: 'x^2 + y^2 = 9' },
+      { label: '抛物线', expr: 'y^2 = 4x' },
+      { label: '双曲线', expr: 'x^2 - y^2 = 4' },
+    ],
+  },
+  {
+    title: '参数与极坐标',
+    description: '需要参数滑块时从这组开始。',
+    items: [
+      { label: '单位圆参数式', expr: 'x = cos(t); y = sin(t); t in [0, 2*pi]' },
+      { label: '摆线', expr: 'x = t - sin(t); y = 1 - cos(t); t in [0, 4*pi]' },
+      { label: '心形线', expr: 'r = 1 + a*cos(theta); theta in [0, 2*pi]' },
+    ],
+  },
+  {
+    title: '语法速查',
+    description: '给表达式编辑器的常用语法。',
+    items: [
+      { label: '分段函数', expr: 'piecewise(x < 0, -1, x > 1, 1, x)' },
+      { label: '函数名', expr: 'sin cos tan asin acos atan exp ln log sqrt abs pow' },
+      { label: '常量名', expr: 'pi e tau sec csc cot if' },
+    ],
+  },
+];
 
 function renderExpressionPreview(expr) {
   if (!expr) return null;
@@ -995,7 +1034,7 @@ function PlotCanvas({
         onTouchEnd={onTouchEnd}
         onTouchCancel={onTouchEnd}
         style={{ display: 'block', cursor: draggingRef.current || tangentDragRef.current ? 'grabbing' : 'crosshair' }}
-        aria-label="Function plot canvas"
+        aria-label="函数绘图画布"
       />
     </div>
   );
@@ -1046,8 +1085,8 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly, selected, onSelect
           e.stopPropagation();
           onChange({ ...fn, visible: !fn.visible });
         }}
-        title={fn.visible ? 'Hide' : 'Show'}
-        aria-label={fn.visible ? `Hide ${label}` : `Show ${label}`}
+        title={fn.visible ? '隐藏' : '显示'}
+        aria-label={fn.visible ? `隐藏 ${label}` : `显示 ${label}`}
         style={{
           width: 36, border: 'none', cursor: 'pointer', background: 'transparent',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1084,8 +1123,8 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly, selected, onSelect
                 setEditing(false);
               }
             }}
-            placeholder="e.g. y = sin(x); x in [-pi, pi]"
-            aria-label={`Expression for ${label}`}
+            placeholder="例如：y = sin(x); x in [-pi, pi]"
+            aria-label={`${label} 的表达式`}
             style={{
               width: '100%', border: 'none', outline: 'none', background: 'transparent',
               fontFamily: '"JetBrains Mono", monospace', fontSize: 14, color: theme.ink,
@@ -1112,7 +1151,7 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly, selected, onSelect
             {fn.expr ? (
               hasError ? fn.expr : <span className="expr-preview">{renderExpressionPreview(fn.expr)}</span>
             ) : (
-              <span style={{ color: theme.muted }}>click to enter an expression…</span>
+              <span style={{ color: theme.muted }}>点击输入表达式…</span>
             )}
           </div>
         )}
@@ -1130,7 +1169,7 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly, selected, onSelect
             letterSpacing: '0.08em',
             textTransform: 'uppercase',
           }}>
-            selected
+            已选中
           </div>
         )}
       </div>
@@ -1141,8 +1180,8 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly, selected, onSelect
             e.stopPropagation();
             onDelete();
           }}
-          title="Remove"
-          aria-label={`Remove ${label}`}
+          title="删除"
+          aria-label={`删除 ${label}`}
           style={{
             width: 32, border: 'none', background: 'transparent',
             color: theme.muted, cursor: 'pointer',
@@ -1175,6 +1214,135 @@ function SidebarButton({ children, onClick, theme, ...buttonProps }) {
         fontSize: 11, cursor: 'pointer', transition: 'background 120ms',
       }}
     >{children}</button>
+  );
+}
+
+function ExamplesPage({ theme, onBack, onApplyExample }) {
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{
+        padding: '14px 16px 10px 16px',
+        borderBottom: `1px solid ${theme.rule}`,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+      }}>
+        <button
+          onClick={onBack}
+          title="返回函数列表"
+          style={{
+            width: 28,
+            height: 28,
+            border: `1px solid ${theme.rule}`,
+            background: 'transparent',
+            borderRadius: 999,
+            cursor: 'pointer',
+            color: theme.ink,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <ChevronLeft/>
+        </button>
+        <div style={{ minWidth: 0 }}>
+          <div style={{
+            fontFamily: '"JetBrains Mono", monospace',
+            fontSize: 10,
+            color: theme.muted,
+            letterSpacing: '0.1em',
+          }}>示例</div>
+          <div style={{
+            marginTop: 4,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 13,
+            fontWeight: 600,
+            color: theme.ink,
+          }}>示例与语法</div>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px 18px 16px' }}>
+        <div style={{
+          padding: '12px 14px',
+          borderRadius: 18,
+          background: theme.chip,
+          border: `1px solid ${theme.rule}`,
+          color: theme.muted,
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: 10,
+          lineHeight: 1.7,
+          marginBottom: 14,
+        }}>
+          点击条目会优先填入当前选中的空函数；当前函数已写内容时，会新增一条函数。
+        </div>
+        <div style={{ display: 'grid', gap: 12 }}>
+          {EXAMPLE_SECTIONS.map((section) => (
+            <section
+              key={section.title}
+              className="examples-card"
+              style={{
+                borderRadius: 20,
+                padding: '14px 14px 12px 14px',
+                background: theme.panel,
+                border: `1px solid ${theme.rule}`,
+                boxShadow: `0 14px 30px ${theme.shadow}`,
+              }}
+            >
+              <div style={{
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 13,
+                fontWeight: 600,
+                color: theme.ink,
+              }}>{section.title}</div>
+              <div style={{
+                marginTop: 4,
+                color: theme.muted,
+                fontFamily: '"JetBrains Mono", monospace',
+                fontSize: 10,
+                lineHeight: 1.6,
+              }}>{section.description}</div>
+              <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+                {section.items.map((item) => (
+                  <button
+                    key={`${section.title}:${item.label}`}
+                    className="example-item"
+                    onClick={() => onApplyExample(item.expr)}
+                    title={`插入 ${item.label}`}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '10px 12px',
+                      borderRadius: 16,
+                      border: `1px solid ${theme.rule}`,
+                      background: theme.bg,
+                      cursor: 'pointer',
+                      color: theme.ink,
+                    }}
+                  >
+                    <div style={{
+                      fontFamily: 'Inter, sans-serif',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: theme.ink,
+                    }}>{item.label}</div>
+                    <div style={{
+                      marginTop: 5,
+                      fontFamily: '"JetBrains Mono", monospace',
+                      fontSize: 10,
+                      lineHeight: 1.6,
+                      color: theme.muted,
+                      wordBreak: 'break-word',
+                    }}>{item.expr}</div>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1244,8 +1412,10 @@ function ExpandedSidebarInner({
   parameterNames,
   parameterConfig,
   onParameterChange,
+  onApplyExample,
 }) {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const [panelPage, setPanelPage] = useState('functions');
   const themeMenuRef = useRef(null);
 
   const addFn = () => {
@@ -1315,13 +1485,13 @@ function ExpandedSidebarInner({
           <div style={{
             fontFamily: '"JetBrains Mono", monospace',
             fontSize: 10, color: theme.muted, marginTop: 3,
-            letterSpacing: '0.08em', textTransform: 'uppercase',
-          }}>function plotter</div>
+            letterSpacing: '0.08em',
+          }}>函数绘图台</div>
         </div>
         <div ref={themeMenuRef} style={{ position: 'relative' }}>
           <button
             onClick={() => setThemeMenuOpen(v => !v)}
-            title="Theme"
+            title="主题"
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '0 8px', height: 28,
@@ -1346,9 +1516,9 @@ function ExpandedSidebarInner({
               <div style={{
                 fontFamily: '"JetBrains Mono", monospace',
                 fontSize: 10, color: theme.muted,
-                letterSpacing: '0.1em', textTransform: 'uppercase',
+                letterSpacing: '0.1em',
                 marginBottom: 8,
-              }}>Theme</div>
+              }}>主题</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
                 {Object.entries(window.LOCUS_THEMES).map(([key, t]) => {
                   const active = themeKey === key;
@@ -1387,7 +1557,7 @@ function ExpandedSidebarInner({
         </div>
         <button
           onClick={onCollapse}
-          title="Collapse sidebar"
+          title="收起侧栏"
           style={{
             width: 28, height: 28, border: `1px solid ${theme.rule}`,
             background: 'transparent', borderRadius: 4, cursor: 'pointer',
@@ -1398,90 +1568,148 @@ function ExpandedSidebarInner({
         </button>
       </div>
 
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '14px 16px 8px 16px',
-      }}>
-        <div style={{
-          fontFamily: '"JetBrains Mono", monospace',
-          fontSize: 10, color: theme.muted,
-          letterSpacing: '0.1em', textTransform: 'uppercase',
-        }}>Functions · {functions.length}</div>
-        <button
-          onClick={addFn}
-          title="Add function"
-          style={{
-            display: 'flex', alignItems: 'center', gap: 4,
-            padding: '4px 8px', background: 'transparent',
-            border: `1px solid ${theme.rule}`, borderRadius: 4,
-            color: theme.ink, fontFamily: 'Inter, sans-serif',
-            fontSize: 11, cursor: 'pointer',
-          }}
-          onMouseEnter={e => e.currentTarget.style.borderColor = theme.ruleStrong}
-          onMouseLeave={e => e.currentTarget.style.borderColor = theme.rule}
-        >
-          <PlusIcon/> Add
-        </button>
-      </div>
-
-      <div style={{ flex: 1, overflowY: 'auto', borderTop: `1px solid ${theme.rule}` }}>
-        {functions.map((fn, i) => (
-          <FunctionRow
-            key={fn.id}
-            fn={fn}
-            theme={theme}
-            onChange={(next) => updateFn(i, next)}
-            onDelete={() => deleteFn(i)}
-            isOnly={functions.length === 1}
-            selected={fn.id === selectedFunctionId}
-            onSelect={() => onSelectFunction(fn.id)}
-          />
-        ))}
-        {functions.length === 0 && (
-          <div style={{ padding: '20px 16px', color: theme.muted, fontSize: 12 }}>
-            No functions yet. Add one to get started.
-          </div>
-        )}
-        {parameterNames.length > 0 && (
-          <div style={{ borderTop: `1px solid ${theme.rule}`, marginTop: 8 }}>
+      {panelPage === 'functions' ? (
+        <>
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '14px 16px 8px 16px',
+          }}>
             <div style={{
-              padding: '12px 16px 8px 16px',
               fontFamily: '"JetBrains Mono", monospace',
-              fontSize: 10,
-              color: theme.muted,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-            }}>Parameters</div>
-            {parameterNames.map((name) => (
-              <ParameterControl
-                key={name}
-                name={name}
-                config={sanitizeParameterConfig(parameterConfig[name], defaultParameterConfig(name))}
+              fontSize: 10, color: theme.muted,
+              letterSpacing: '0.1em',
+            }}>函数 · {functions.length}</div>
+            <button
+              onClick={addFn}
+              title="新增函数"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 4,
+                padding: '4px 8px', background: 'transparent',
+                border: `1px solid ${theme.rule}`, borderRadius: 4,
+                color: theme.ink, fontFamily: 'Inter, sans-serif',
+                fontSize: 11, cursor: 'pointer',
+              }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = theme.ruleStrong}
+              onMouseLeave={e => e.currentTarget.style.borderColor = theme.rule}
+            >
+              <PlusIcon/> 新增
+            </button>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', borderTop: `1px solid ${theme.rule}` }}>
+            {functions.map((fn, i) => (
+              <FunctionRow
+                key={fn.id}
+                fn={fn}
                 theme={theme}
-                onChange={onParameterChange}
+                onChange={(next) => updateFn(i, next)}
+                onDelete={() => deleteFn(i)}
+                isOnly={functions.length === 1}
+                selected={fn.id === selectedFunctionId}
+                onSelect={() => onSelectFunction(fn.id)}
               />
             ))}
+            {functions.length === 0 && (
+              <div style={{ padding: '20px 16px', color: theme.muted, fontSize: 12 }}>
+                还没有函数，先新增一条开始。
+              </div>
+            )}
+            {parameterNames.length > 0 && (
+              <div style={{ borderTop: `1px solid ${theme.rule}`, marginTop: 8 }}>
+                <div style={{
+                  padding: '12px 16px 8px 16px',
+                  fontFamily: '"JetBrains Mono", monospace',
+                  fontSize: 10,
+                  color: theme.muted,
+                  letterSpacing: '0.08em',
+                }}>参数</div>
+                {parameterNames.map((name) => (
+                  <ParameterControl
+                    key={name}
+                    name={name}
+                    config={sanitizeParameterConfig(parameterConfig[name], defaultParameterConfig(name))}
+                    theme={theme}
+                    onChange={onParameterChange}
+                  />
+                ))}
+              </div>
+            )}
+            <div style={{
+              padding: '14px 16px 18px 16px',
+              borderTop: `1px dashed ${theme.rule}`,
+              marginTop: 8,
+            }}>
+              <button
+                className="examples-entry"
+                onClick={() => setPanelPage('examples')}
+                title="打开示例页"
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '14px 16px',
+                  borderRadius: 22,
+                  border: `1px solid ${theme.rule}`,
+                  background: theme.chip,
+                  cursor: 'pointer',
+                  boxShadow: `0 16px 32px ${theme.shadow}`,
+                }}
+              >
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                }}>
+                  <div>
+                    <div style={{
+                      fontFamily: '"JetBrains Mono", monospace',
+                      fontSize: 10,
+                      color: theme.muted,
+                      letterSpacing: '0.08em',
+                    }}>示例</div>
+                    <div style={{
+                      marginTop: 5,
+                      fontFamily: 'Inter, sans-serif',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: theme.ink,
+                    }}>示例与语法收纳页</div>
+                  </div>
+                  <div className="examples-entry-arrow" style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 999,
+                    border: `1px solid ${theme.rule}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: theme.ink,
+                    flexShrink: 0,
+                    background: theme.panel,
+                  }}>
+                    <ChevronRight/>
+                  </div>
+                </div>
+                <div style={{
+                  marginTop: 9,
+                  fontFamily: '"JetBrains Mono", monospace',
+                  fontSize: 10,
+                  lineHeight: 1.7,
+                  color: theme.muted,
+                }}>
+                  常用曲线、隐函数、参数式和语法速查已经移到单独页面。
+                </div>
+              </button>
+            </div>
           </div>
-        )}
-        <div style={{
-          padding: '12px 16px 16px 16px',
-          fontFamily: '"JetBrains Mono", monospace', fontSize: 10,
-          color: theme.muted, lineHeight: 1.6,
-          borderTop: `1px dashed ${theme.rule}`,
-          marginTop: 8,
-        }}>
-          <div style={{ letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Reference</div>
-          <div>y = sin(x) · y = 0.5*x^2 - 2</div>
-          <div>x^2 + y^2 = 9 · y^2 = 4x</div>
-          <div>x = cos(t); y = sin(t); t in [0, 2*pi]</div>
-          <div>r = 1 + a*cos(theta); theta in [0, 2*pi]</div>
-          <div>piecewise(x &lt; 0, -1, x &gt; 1, 1, x)</div>
-          <div>y = sqrt(4 - x^2); x in [-2, 2]</div>
-          <div>sin · cos · tan · asin · acos · atan</div>
-          <div>exp · ln · log · sqrt · abs · pow</div>
-          <div>pi · e · tau · sec · csc · cot · if</div>
-        </div>
-      </div>
+        </>
+      ) : (
+        <ExamplesPage
+          theme={theme}
+          onBack={() => setPanelPage('functions')}
+          onApplyExample={onApplyExample}
+        />
+      )}
 
       <div style={{ borderTop: `1px solid ${theme.rule}` }}>
         <div style={{
@@ -1508,8 +1736,8 @@ function ExpandedSidebarInner({
               <span style={{ color: theme.ink }}>{formatCoordinateValue(traceInfo.y, coordMode)}</span>
             </div>
           ) : (
-            <div style={{ color: theme.muted, fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-              hover any curve to trace
+            <div style={{ color: theme.muted, fontSize: 10, letterSpacing: '0.08em' }}>
+              悬停曲线查看坐标
             </div>
           )}
         </div>
@@ -1520,21 +1748,20 @@ function ExpandedSidebarInner({
           fontFamily: '"JetBrains Mono", monospace',
           fontSize: 10,
           letterSpacing: '0.08em',
-          textTransform: 'uppercase',
         }}>
-          X scale {formatDecimalNumber(view.scaleX)} · Y scale {formatDecimalNumber(view.scaleY)}
+          X 缩放 {formatDecimalNumber(view.scaleX)} · Y 缩放 {formatDecimalNumber(view.scaleY)}
         </div>
 
         <div style={{ padding: '10px 16px 12px 16px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <SidebarButton theme={theme} onClick={() => scaleView(1.4, 1.4)}>Zoom +</SidebarButton>
-          <SidebarButton theme={theme} onClick={() => scaleView(1 / 1.4, 1 / 1.4)}>Zoom −</SidebarButton>
-          <SidebarButton theme={theme} onClick={() => scaleView(1.4, 1)} title="Expand the x-axis only">X +</SidebarButton>
-          <SidebarButton theme={theme} onClick={() => scaleView(1 / 1.4, 1)} title="Compress the x-axis only">X −</SidebarButton>
-          <SidebarButton theme={theme} onClick={() => scaleView(1, 1.4)} title="Expand the y-axis only">Y +</SidebarButton>
-          <SidebarButton theme={theme} onClick={() => scaleView(1, 1 / 1.4)} title="Compress the y-axis only">Y −</SidebarButton>
-          <SidebarButton theme={theme} onClick={onFitView}>Fit data</SidebarButton>
-          <SidebarButton theme={theme} onClick={resetView}>Reset</SidebarButton>
-          <SidebarButton theme={theme} onClick={onExport}>Export PNG</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1.4, 1.4)}>放大</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1 / 1.4, 1 / 1.4)}>缩小</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1.4, 1)} title="仅拉伸 X 轴">X 拉伸</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1 / 1.4, 1)} title="仅压缩 X 轴">X 压缩</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1, 1.4)} title="仅拉伸 Y 轴">Y 拉伸</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1, 1 / 1.4)} title="仅压缩 Y 轴">Y 压缩</SidebarButton>
+          <SidebarButton theme={theme} onClick={onFitView}>适配数据</SidebarButton>
+          <SidebarButton theme={theme} onClick={resetView}>重置</SidebarButton>
+          <SidebarButton theme={theme} onClick={onExport}>导出 PNG</SidebarButton>
         </div>
       </div>
     </div>
@@ -1551,8 +1778,8 @@ function CollapsedRailInner({ functions, theme, onExpand, onToggleVisibility }) 
     }}>
       <button
         onClick={onExpand}
-        title="Expand sidebar"
-        aria-label="Expand sidebar"
+        title="展开侧栏"
+        aria-label="展开侧栏"
         style={{
           width: 32, height: 32, border: `1px solid ${theme.rule}`,
           background: 'transparent', borderRadius: 4, cursor: 'pointer',
@@ -1575,8 +1802,8 @@ function CollapsedRailInner({ functions, theme, onExpand, onToggleVisibility }) 
           <button
             key={fn.id}
             onClick={() => onToggleVisibility(fn.id)}
-            title={`${fn.label || 'f'}(x) = ${fn.expr || '—'}  ·  click to ${fn.visible ? 'hide' : 'show'}`}
-            aria-label={`${fn.visible ? 'Hide' : 'Show'} ${fn.label || 'function'}`}
+            title={`${fn.label || 'f'} = ${fn.expr || '—'} · 点击${fn.visible ? '隐藏' : '显示'}`}
+            aria-label={`${fn.visible ? '隐藏' : '显示'} ${fn.label || '函数'}`}
             style={{
               width: 18, height: 18, padding: 0,
               border: 'none', background: 'transparent', cursor: 'pointer',
@@ -1639,7 +1866,7 @@ function SidebarShell(props) {
         <div
           className="resize-handle"
           onMouseDown={onResizeStart}
-          title="Drag to resize"
+          title="拖动调整宽度"
           style={{
             position: 'absolute',
             top: 0, right: -3, bottom: 0,

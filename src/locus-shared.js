@@ -194,15 +194,15 @@
   }
 
   function humanizeError(msg) {
-    if (!msg) return 'Invalid expression';
-    if (msg.startsWith('Unknown: ')) return 'Unknown name "' + msg.slice(9) + '"';
-    if (msg.startsWith('Not a function: ')) return '"' + msg.slice(16) + '" is not callable';
-    if (msg.startsWith('Unexpected character: ')) return 'Unexpected character "' + msg.slice(22) + '"';
-    if (msg.includes('Unexpected token')) return 'Check syntax near an operator';
-    if (msg.includes('Trailing tokens')) return 'Extra characters at end';
-    if (msg.includes('piecewise')) return 'piecewise expects condition/value pairs';
-    if (msg.includes('if expects')) return 'if(condition, whenTrue, whenFalse)';
-    if (msg.startsWith('Bad op: ')) return 'Unsupported operator';
+    if (!msg) return '表达式无效';
+    if (msg.startsWith('Unknown: ')) return '未知名称：“' + msg.slice(9) + '”';
+    if (msg.startsWith('Not a function: ')) return '“' + msg.slice(16) + '”不是可调用函数';
+    if (msg.startsWith('Unexpected character: ')) return '存在无法识别的字符：“' + msg.slice(22) + '”';
+    if (msg.includes('Unexpected token')) return '请检查运算符附近的语法';
+    if (msg.includes('Trailing tokens')) return '末尾存在多余内容';
+    if (msg.includes('piecewise')) return 'piecewise 需要成对的条件和值';
+    if (msg.includes('if expects')) return 'if 的格式应为 if(condition, whenTrue, whenFalse)';
+    if (msg.startsWith('Bad op: ')) return '存在不支持的运算符';
     return msg;
   }
 

@@ -321,6 +321,31 @@ function App() {
     });
   }, []);
 
+  const applyExample = useCallback((expr) => {
+    setFunctions((prev) => {
+      const selectedIndex = prev.findIndex((fn) => fn.id === selectedFunctionId);
+      if (selectedIndex >= 0 && !prev[selectedIndex].expr.trim()) {
+        const next = [...prev];
+        next[selectedIndex] = { ...next[selectedIndex], expr };
+        return next;
+      }
+      const palette = theme.funcPalette;
+      const color = window.LocusShared.nextFreeColor(prev, palette);
+      const labelSeq = window.LocusShared.nextFreeSeq(prev);
+      const id = Math.random().toString(36).slice(2, 9);
+      setSelectedFunctionId(id);
+      return [...prev, {
+        id,
+        expr,
+        visible: true,
+        color,
+        thickness: 2,
+        labelSeq,
+        label: formatFnLabel(labelSeq),
+      }];
+    });
+  }, [selectedFunctionId, theme.funcPalette]);
+
   const scaleView = useCallback((factorX, factorY) => {
     setView((current) => sanitizeView({
       ...current,
@@ -441,6 +466,7 @@ function App() {
         parameterNames={parameterNames}
         parameterConfig={parameterConfig}
         onParameterChange={onParameterChange}
+        onApplyExample={applyExample}
         collapsed={collapsed}
         expandedWidth={sidebarWidth}
         onCollapse={() => setCollapsed(true)}
@@ -468,21 +494,21 @@ function App() {
             <button
               className={coordMode === COORD_MODES.exact ? 'active' : ''}
               onClick={() => setCoordMode(COORD_MODES.exact)}
-              title="Show coordinates as exact fractions of π, e where possible"
-              aria-label="Exact coordinates"
+              title="尽量用精确形式显示坐标"
+              aria-label="精确坐标"
               style={{ color: coordMode === COORD_MODES.exact ? theme.ink : theme.muted, background: coordMode === COORD_MODES.exact ? theme.chip : 'transparent' }}
-            >Exact</button>
+            >精确</button>
             <button
               className={coordMode === COORD_MODES.decimal ? 'active' : ''}
               onClick={() => setCoordMode(COORD_MODES.decimal)}
-              title="Show coordinates in decimal form"
-              aria-label="Decimal coordinates"
+              title="用小数形式显示坐标"
+              aria-label="小数坐标"
               style={{ color: coordMode === COORD_MODES.decimal ? theme.ink : theme.muted, background: coordMode === COORD_MODES.decimal ? theme.chip : 'transparent' }}
-            >Decimal</button>
+            >小数</button>
           </div>
           <button
             onClick={() => setTangentMode((value) => !value)}
-            title={tangentMode ? 'Exit tangent mode' : 'Enter tangent mode'}
+            title={tangentMode ? '退出切线模式' : '进入切线模式'}
             style={{
               border: `1px solid ${theme.rule}`,
               background: tangentMode ? theme.chip : theme.panel,
@@ -496,7 +522,7 @@ function App() {
               cursor: 'pointer',
             }}
           >
-            {tangentMode ? `Tangents · ${selectedTangentCount}` : 'Tangents'}
+            {tangentMode ? `切线 · ${selectedTangentCount}` : '切线'}
           </button>
         </div>
 
@@ -515,13 +541,13 @@ function App() {
                 fontFamily: '"JetBrains Mono", monospace',
                 fontSize: 12,
               }}
-              aria-label="Toggle theme tweaks"
+              aria-label="切换主题调节面板"
             >
               ✦
             </button>
             {tweaksOpen && (
               <div ref={tweaksRef} className="tweaks-panel">
-                <h3>Theme</h3>
+                <h3>主题</h3>
                 <div className="theme-grid">
                   {Object.entries(window.LOCUS_THEMES).map(([key, t]) => (
                     <button
@@ -532,7 +558,7 @@ function App() {
                         background: t.bg,
                         borderColor: key === themeKey ? theme.ink : 'transparent',
                       }}
-                      aria-label={`Use ${t.name}`}
+                      aria-label={`使用 ${t.name}`}
                     >
                       <div style={{ position: 'absolute', inset: 5, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2 }}>
                         {t.funcPalette.slice(0, 3).map((color, idx) => (
