@@ -532,57 +532,86 @@
   }
 
   function mergeIntersectionPoints(points, xTol, yTol, curvesById, params = {}) {
-    const clusters = [];
-    const sorted = [...points].sort((a, b) => {
-      const pairA = [a.fnId, a.fn2Id].filter(Boolean).sort().join('|');
-      const pairB = [b.fnId, b.fn2Id].filter(Boolean).sort().join('|');
-      return pairA.localeCompare(pairB) || a.x - b.x || a.y - b.y;
-    });
-
-    sorted.forEach((point) => {
-      const pairKey = [point.fnId, point.fn2Id].filter(Boolean).sort().join('|');
-      const last = clusters[clusters.length - 1];
-      if (
-        last &&
-        last.pairKey === pairKey &&
-        Math.abs(last.centerX - point.x) <= xTol &&
-        Math.abs(last.centerY - point.y) <= yTol
-      ) {
-        last.points.push(point);
-        const count = last.points.length;
-        last.centerX += (point.x - last.centerX) / count;
-        last.centerY += (point.y - last.centerY) / count;
-        return;
+    if (!points.length) return [];
+    const groups = new Map();
+    points.forEach((point) => {
+      const key = [point.fnId, point.fn2Id].filter(Boolean).sort().join('|');
+      let bucket = groups.get(key);
+      if (!bucket) {
+        bucket = [];
+        groups.set(key, bucket);
       }
-      clusters.push({ pairKey, centerX: point.x, centerY: point.y, points: [point] });
+      bucket.push(point);
     });
 
-    return clusters.map((cluster) => {
-      let bestPoint = cluster.points[0];
-      let bestScore = NaN;
-      let hasScoredPoint = false;
-      cluster.points.forEach((point) => {
-        let scored = false;
-        const score = [point.fnId, point.fn2Id].reduce((sum, id) => {
-          const residual = curveResidualAtPoint(curvesById.get(id), point.x, point.y, params);
-          if (!Number.isFinite(residual)) return sum;
-          scored = true;
-          return sum + residual;
-        }, 0);
-        if (!scored) return;
-        if (!hasScoredPoint || score < bestScore) {
-          bestPoint = point;
-          bestScore = score;
-          hasScoredPoint = true;
+    const merged = [];
+    groups.forEach((group) => {
+      const n = group.length;
+      const parent = Array.from({ length: n }, (_, i) => i);
+      const find = (i) => {
+        let root = i;
+        while (parent[root] !== root) root = parent[root];
+        while (parent[i] !== root) {
+          const next = parent[i];
+          parent[i] = root;
+          i = next;
         }
-      });
-      if (hasScoredPoint) return bestPoint;
-      return {
-        ...bestPoint,
-        x: cluster.centerX,
-        y: cluster.centerY,
+        return root;
       };
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          if (
+            Math.abs(group[i].x - group[j].x) <= xTol &&
+            Math.abs(group[i].y - group[j].y) <= yTol
+          ) {
+            const ri = find(i);
+            const rj = find(j);
+            if (ri !== rj) parent[ri] = rj;
+          }
+        }
+      }
+      const clusters = new Map();
+      for (let i = 0; i < n; i++) {
+        const root = find(i);
+        let bucket = clusters.get(root);
+        if (!bucket) {
+          bucket = [];
+          clusters.set(root, bucket);
+        }
+        bucket.push(group[i]);
+      }
+      clusters.forEach((cluster) => {
+        let bestPoint = cluster[0];
+        let bestScore = NaN;
+        let hasScoredPoint = false;
+        let sumX = 0;
+        let sumY = 0;
+        cluster.forEach((point) => {
+          sumX += point.x;
+          sumY += point.y;
+          let scored = false;
+          const score = [point.fnId, point.fn2Id].reduce((sum, id) => {
+            const residual = curveResidualAtPoint(curvesById.get(id), point.x, point.y, params);
+            if (!Number.isFinite(residual)) return sum;
+            scored = true;
+            return sum + residual;
+          }, 0);
+          if (!scored) return;
+          if (!hasScoredPoint || score < bestScore) {
+            bestPoint = point;
+            bestScore = score;
+            hasScoredPoint = true;
+          }
+        });
+        merged.push(hasScoredPoint ? bestPoint : {
+          ...bestPoint,
+          x: sumX / cluster.length,
+          y: sumY / cluster.length,
+        });
+      });
     });
+
+    return merged;
   }
 
   function computeSpecialPoints(featureFunctions, curves, polylineCurves, implicitCurves, xMin, xMax, yMin, yMax, scaleX, scaleY, width, height, params = {}) {
