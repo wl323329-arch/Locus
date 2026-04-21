@@ -2,9 +2,12 @@
   const { useState, useEffect, useRef, useMemo, useCallback } = React;
   const {
     RAIL_WIDTH,
+    MAX_VIEW_SCALE,
+    DEFAULT_VIEW,
     COORD_MODES,
     defaultParameterConfig,
     sanitizeParameterConfig,
+    sanitizeView,
     formatFnLabel,
     inferCurveKindFromExpr,
     humanizeError,
@@ -86,10 +89,10 @@
     const [view, setView] = useState(() => {
       try {
         const s = localStorage.getItem("locus:view");
-        if (s) return JSON.parse(s);
+        if (s) return sanitizeView(JSON.parse(s));
       } catch {
       }
-      return { cx: 0, cy: 0, scale: 50 };
+      return DEFAULT_VIEW;
     });
     const [selectedFunctionId, setSelectedFunctionId] = useState(null);
     const [tangentMode, setTangentMode] = useState(false);
@@ -339,10 +342,20 @@
         return { ...prev, [name]: next };
       });
     }, []);
+    const scaleView = useCallback((factorX, factorY) => {
+      setView((current) => sanitizeView({
+        ...current,
+        scaleX: current.scaleX * factorX,
+        scaleY: current.scaleY * factorY
+      }));
+    }, []);
+    const resetView = useCallback(() => {
+      setView(DEFAULT_VIEW);
+    }, []);
     const fitView = useCallback(() => {
       const visibleFns = compiledFunctions.filter((f) => f.visible && f.compiled);
       if (!visibleFns.length) {
-        setView({ cx: 0, cy: 0, scale: 50 });
+        resetView();
         return;
       }
       const canvasW = Math.max(360, window.innerWidth - (collapsed ? RAIL_WIDTH : sidebarWidth));
@@ -384,7 +397,7 @@
         });
       });
       if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || !Number.isFinite(yMin) || !Number.isFinite(yMax)) {
-        setView({ cx: 0, cy: 0, scale: 50 });
+        resetView();
         return;
       }
       if (xMin === xMax) {
@@ -400,26 +413,27 @@
       const cy = (yMin + yMax) / 2;
       const xRange = (xMax - xMin) * pad;
       const yRange = (yMax - yMin) * pad;
-      const scale = Math.max(1, Math.min(4e3, Math.min(canvasW / xRange, canvasH / yRange)));
-      setView({ cx, cy, scale });
-    }, [compiledFunctions, collapsed, parameterValues, sidebarWidth]);
+      const scaleX = Math.max(1, Math.min(MAX_VIEW_SCALE, canvasW / xRange));
+      const scaleY = Math.max(1, Math.min(MAX_VIEW_SCALE, canvasH / yRange));
+      setView({ cx, cy, scaleX, scaleY });
+    }, [compiledFunctions, collapsed, parameterValues, resetView, sidebarWidth]);
     useEffect(() => {
       const onKey = (e) => {
         const tag = e.target && e.target.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || e.target && e.target.isContentEditable) return;
-        if (e.metaKey || e.ctrlKey || e.altKey) return;
-        if (e.key === "+" || e.key === "=") {
-          e.preventDefault();
-          setView((v) => ({ ...v, scale: Math.min(8e3, v.scale * 1.4) }));
-        } else if (e.key === "-" || e.key === "_") {
-          e.preventDefault();
-          setView((v) => ({ ...v, scale: Math.max(0.5, v.scale / 1.4) }));
-        } else if (e.key === "0" || e.key === "H" || e.key === "h") {
-          e.preventDefault();
-          setView({ cx: 0, cy: 0, scale: 50 });
-        } else if (e.key === "f" || e.key === "F") {
-          e.preventDefault();
-          fitView();
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "+" || e.key === "=") {
+        e.preventDefault();
+        scaleView(1.4, 1.4);
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        scaleView(1 / 1.4, 1 / 1.4);
+      } else if (e.key === "0" || e.key === "H" || e.key === "h") {
+        e.preventDefault();
+        resetView();
+      } else if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        fitView();
         } else if (e.key === "e" || e.key === "E") {
           e.preventDefault();
           exportPNG();
@@ -427,7 +441,7 @@
       };
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [fitView]);
+    }, [fitView, resetView, scaleView]);
     const selectedTangentCount = tangentPoints.filter((tangent) => tangent.fnId === selectedFunctionId).length;
     return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", width: "100%", height: "100%", background: theme.bg } }, /* @__PURE__ */ React.createElement(
       SidebarShell,

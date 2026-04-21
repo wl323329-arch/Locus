@@ -1,9 +1,28 @@
 (function () {
   const RAIL_WIDTH = 48;
+  const MIN_VIEW_SCALE = 0.5;
+  const MAX_VIEW_SCALE = 8000;
+  const DEFAULT_VIEW = { cx: 0, cy: 0, scaleX: 50, scaleY: 50 };
   const COORD_MODES = {
     exact: 'exact',
     decimal: 'decimal',
   };
+
+  function clampViewScale(value, fallback = DEFAULT_VIEW.scaleX) {
+    if (!Number.isFinite(+value)) return fallback;
+    return Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, +value));
+  }
+
+  function sanitizeView(view) {
+    const next = view && typeof view === 'object' ? view : {};
+    const legacyScale = Number.isFinite(+next.scale) ? +next.scale : DEFAULT_VIEW.scaleX;
+    return {
+      cx: Number.isFinite(+next.cx) ? +next.cx : DEFAULT_VIEW.cx,
+      cy: Number.isFinite(+next.cy) ? +next.cy : DEFAULT_VIEW.cy,
+      scaleX: clampViewScale(next.scaleX, legacyScale),
+      scaleY: clampViewScale(next.scaleY, legacyScale),
+    };
+  }
 
   function defaultParameterConfig(name) {
     const centered = new Set(['h', 'k', 'm', 'n']);
@@ -467,14 +486,14 @@
     return points;
   }
 
-  function computeSpecialPoints(featureFunctions, curves, polylineCurves, implicitCurves, xMin, xMax, yMin, yMax, scale, width, height, params = {}) {
+  function computeSpecialPoints(featureFunctions, curves, polylineCurves, implicitCurves, xMin, xMax, yMin, yMax, scaleX, scaleY, width, height, params = {}) {
     const visibleExplicit = curves.filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit');
     const sampledCurves = polylineCurves || [];
     const visibleImplicit = implicitCurves || [];
     if (!sampledCurves.length && !visibleImplicit.length) return [];
     if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || xMax <= xMin) return [];
     const sampleCount = Math.max(320, Math.min(1600, Math.floor(width * 1.5)));
-    const yTol = Math.max(1e-6, 6 / scale);
+    const yTol = Math.max(1e-6, 6 / Math.max(scaleY, 1));
     const xTol = Math.max((xMax - xMin) / sampleCount * 2, 1e-6);
     const points = [];
 
@@ -790,19 +809,19 @@
     return { x, y, t, dist: Math.hypot(point.x - x, point.y - y) };
   }
 
-  function differentiateExplicit(compiled, x, scale, params = {}) {
+  function differentiateExplicit(compiled, x, scaleX, params = {}) {
     if (!compiled || compiled.kind !== 'explicit') return null;
-    const h = Math.max(1e-4, Math.abs(x) * 1e-4, 2 / Math.max(scale, 1));
+    const h = Math.max(1e-4, Math.abs(x) * 1e-4, 2 / Math.max(scaleX, 1));
     const left = evaluateExplicitSafe(compiled, x - h, params);
     const right = evaluateExplicitSafe(compiled, x + h, params);
     if (!Number.isFinite(left) || !Number.isFinite(right)) return null;
     return (right - left) / (2 * h);
   }
 
-  function differentiateImplicit(compiled, x, y, scale, params = {}) {
+  function differentiateImplicit(compiled, x, y, scaleX, scaleY, params = {}) {
     if (!compiled || compiled.kind !== 'implicit') return null;
-    const hx = Math.max(1e-4, Math.abs(x) * 1e-4, 2 / Math.max(scale, 1));
-    const hy = Math.max(1e-4, Math.abs(y) * 1e-4, 2 / Math.max(scale, 1));
+    const hx = Math.max(1e-4, Math.abs(x) * 1e-4, 2 / Math.max(scaleX, 1));
+    const hy = Math.max(1e-4, Math.abs(y) * 1e-4, 2 / Math.max(scaleY, 1));
     const fx1 = evaluateImplicitSafe(compiled, x + hx, y, params);
     const fx0 = evaluateImplicitSafe(compiled, x - hx, y, params);
     const fy1 = evaluateImplicitSafe(compiled, x, y + hy, params);
@@ -814,9 +833,9 @@
     };
   }
 
-  function differentiateSampledCurve(compiled, parameterValue, scale, params = {}) {
+  function differentiateSampledCurve(compiled, parameterValue, scaleX, scaleY, params = {}) {
     if (!compiled || !['parametric', 'polar'].includes(compiled.kind)) return null;
-    const h = Math.max(1e-4, Math.abs(parameterValue) * 1e-4, 2 / Math.max(scale, 1));
+    const h = Math.max(1e-4, Math.abs(parameterValue) * 1e-4, 2 / Math.max(scaleX, scaleY, 1));
     const left = evaluateCurvePointSafe(compiled, parameterValue - h, params);
     const right = evaluateCurvePointSafe(compiled, parameterValue + h, params);
     if (!left || !right) return null;
@@ -826,21 +845,23 @@
     };
   }
 
-  function getTangentLine(fn, point, scale, params = {}) {
+  function getTangentLine(fn, point, view, params = {}) {
     if (!fn || !fn.compiled || !point) return null;
+    const scaleX = Math.max(view?.scaleX || view?.scale || DEFAULT_VIEW.scaleX, 1);
+    const scaleY = Math.max(view?.scaleY || view?.scale || DEFAULT_VIEW.scaleY, 1);
     if (fn.compiled.kind === 'explicit') {
-      const slope = differentiateExplicit(fn.compiled, point.x, scale, params);
+      const slope = differentiateExplicit(fn.compiled, point.x, scaleX, params);
       if (!Number.isFinite(slope)) return null;
       return { type: 'slope', x: point.x, y: point.y, slope };
     }
     if (fn.compiled.kind === 'implicit') {
-      const gradient = differentiateImplicit(fn.compiled, point.x, point.y, scale, params);
+      const gradient = differentiateImplicit(fn.compiled, point.x, point.y, scaleX, scaleY, params);
       if (!gradient) return null;
       if (Math.abs(gradient.fx) < 1e-8 && Math.abs(gradient.fy) < 1e-8) return null;
       if (Math.abs(gradient.fy) < 1e-8) return { type: 'vertical', x: point.x, y: point.y };
       return { type: 'slope', x: point.x, y: point.y, slope: -gradient.fx / gradient.fy };
     }
-    const derivative = differentiateSampledCurve(fn.compiled, point.parameterValue, scale, params);
+    const derivative = differentiateSampledCurve(fn.compiled, point.parameterValue, scaleX, scaleY, params);
     if (!derivative) return null;
     if (Math.abs(derivative.dx) < 1e-8 && Math.abs(derivative.dy) < 1e-8) return null;
     if (Math.abs(derivative.dx) < 1e-8) return { type: 'vertical', x: point.x, y: point.y };
@@ -849,7 +870,11 @@
 
   window.LocusShared = {
     RAIL_WIDTH,
+    MIN_VIEW_SCALE,
+    MAX_VIEW_SCALE,
+    DEFAULT_VIEW,
     COORD_MODES,
+    sanitizeView,
     defaultParameterConfig,
     sanitizeParameterConfig,
     formatDecimalNumber,

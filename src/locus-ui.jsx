@@ -1,6 +1,10 @@
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 const {
   RAIL_WIDTH,
+  MIN_VIEW_SCALE,
+  MAX_VIEW_SCALE,
+  DEFAULT_VIEW,
+  sanitizeView,
   inferCurveKindFromExpr,
   formatDecimalNumber,
   formatCoordinateValue,
@@ -121,13 +125,13 @@ function PlotCanvas({
   }, []);
 
   const worldToScreen = useCallback((wx, wy) => {
-    const { cx, cy, scale } = view;
-    return [size.w / 2 + (wx - cx) * scale, size.h / 2 - (wy - cy) * scale];
+    const { cx, cy, scaleX, scaleY } = view;
+    return [size.w / 2 + (wx - cx) * scaleX, size.h / 2 - (wy - cy) * scaleY];
   }, [view, size]);
 
   const screenToWorld = useCallback((sx, sy) => {
-    const { cx, cy, scale } = view;
-    return [cx + (sx - size.w / 2) / scale, cy - (sy - size.h / 2) / scale];
+    const { cx, cy, scaleX, scaleY } = view;
+    return [cx + (sx - size.w / 2) / scaleX, cy - (sy - size.h / 2) / scaleY];
   }, [view, size]);
 
   useEffect(() => {
@@ -164,7 +168,7 @@ function PlotCanvas({
       .map((tangent) => {
         const owner = functions.find((fn) => fn.id === tangent.fnId);
         if (!owner || !owner.compiled) return null;
-        const tangentLine = getTangentLine(owner, tangent, view.scale, parameters);
+        const tangentLine = getTangentLine(owner, tangent, view, parameters);
         if (!tangentLine) return null;
         const label = formatTangentLabel(tangent.seq, owner.label);
         if (tangentLine.type === 'vertical') {
@@ -205,7 +209,7 @@ function PlotCanvas({
         };
       })
       .filter(Boolean)
-  ), [functions, parameters, tangentPoints, view.scale]);
+  ), [functions, parameters, tangentPoints, view]);
 
   const curveEntities = useMemo(() => [...functions, ...tangentCurves], [functions, tangentCurves]);
   const sampledPolylineCurves = useMemo(() => (
@@ -233,12 +237,13 @@ function PlotCanvas({
       worldBounds.wxMax,
       worldBounds.wyMin,
       worldBounds.wyMax,
-      view.scale,
+      view.scaleX,
+      view.scaleY,
       size.w,
       size.h,
       parameters,
     )
-  ), [curveEntities, functions, implicitCurveSamples, parameters, sampledPolylineCurves, worldBounds, view.scale, size.h, size.w]);
+  ), [curveEntities, functions, implicitCurveSamples, parameters, sampledPolylineCurves, worldBounds, view.scaleX, view.scaleY, size.h, size.w]);
 
   const pointOverlay = useMemo(() => {
     const screenPoints = specialPoints
@@ -479,32 +484,35 @@ function PlotCanvas({
     ctx.fillStyle = theme.bg;
     ctx.fillRect(0, 0, size.w, size.h);
 
-    const { scale } = view;
-    const targetPx = 80;
-    const roughStep = targetPx / scale;
-    const pow = Math.pow(10, Math.floor(Math.log10(roughStep)));
-    const normalized = roughStep / pow;
-    let step;
-    if (normalized < 1.5) step = pow;
-    else if (normalized < 3.5) step = 2 * pow;
-    else if (normalized < 7.5) step = 5 * pow;
-    else step = 10 * pow;
-    const minorStep = step / 5;
+    const getGridStep = (scale) => {
+      const targetPx = 80;
+      const roughStep = targetPx / Math.max(scale, 1e-6);
+      const pow = Math.pow(10, Math.floor(Math.log10(roughStep)));
+      const normalized = roughStep / pow;
+      if (normalized < 1.5) return pow;
+      if (normalized < 3.5) return 2 * pow;
+      if (normalized < 7.5) return 5 * pow;
+      return 10 * pow;
+    };
+    const stepX = getGridStep(view.scaleX);
+    const stepY = getGridStep(view.scaleY);
+    const minorStepX = stepX / 5;
+    const minorStepY = stepY / 5;
 
     const { wxMin, wxMax, wyMin, wyMax } = worldBounds;
 
-    const drawGridLines = (st, color, width) => {
+    const drawGridLines = (stepHorizontal, stepVertical, color, width) => {
       ctx.strokeStyle = color;
       ctx.lineWidth = width;
       ctx.beginPath();
-      const startX = Math.ceil(wxMin / st) * st;
-      for (let x = startX; x <= wxMax; x += st) {
+      const startX = Math.ceil(wxMin / stepHorizontal) * stepHorizontal;
+      for (let x = startX; x <= wxMax; x += stepHorizontal) {
         const [sx] = worldToScreen(x, 0);
         ctx.moveTo(sx + 0.5, 0);
         ctx.lineTo(sx + 0.5, size.h);
       }
-      const startY = Math.ceil(wyMin / st) * st;
-      for (let y = startY; y <= wyMax; y += st) {
+      const startY = Math.ceil(wyMin / stepVertical) * stepVertical;
+      for (let y = startY; y <= wyMax; y += stepVertical) {
         const [, sy] = worldToScreen(0, y);
         ctx.moveTo(0, sy + 0.5);
         ctx.lineTo(size.w, sy + 0.5);
@@ -512,8 +520,8 @@ function PlotCanvas({
       ctx.stroke();
     };
 
-    drawGridLines(minorStep, theme.gridMinor, 1);
-    drawGridLines(step, theme.gridMajor, 1);
+    drawGridLines(minorStepX, minorStepY, theme.gridMinor, 1);
+    drawGridLines(stepX, stepY, theme.gridMajor, 1);
 
     ctx.strokeStyle = theme.axis;
     ctx.lineWidth = 1.25;
@@ -534,7 +542,7 @@ function PlotCanvas({
     ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    const fmtTick = (v) => {
+    const fmtTick = (v, step) => {
       if (Math.abs(v) < 1e-10) return '0';
       const abs = Math.abs(v);
       if (abs >= 1e5 || abs < 1e-3) return v.toExponential(1);
@@ -542,21 +550,21 @@ function PlotCanvas({
       return v.toFixed(digits);
     };
 
-    const startX = Math.ceil(wxMin / step) * step;
-    for (let x = startX; x <= wxMax; x += step) {
-      if (Math.abs(x) < step * 0.001) continue;
+    const startX = Math.ceil(wxMin / stepX) * stepX;
+    for (let x = startX; x <= wxMax; x += stepX) {
+      if (Math.abs(x) < stepX * 0.001) continue;
       const [sx] = worldToScreen(x, 0);
       const yLabel = Math.max(4, Math.min(size.h - 16, ax0Y + 4));
-      ctx.fillText(fmtTick(x), sx, yLabel);
+      ctx.fillText(fmtTick(x, stepX), sx, yLabel);
     }
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
-    const startY = Math.ceil(wyMin / step) * step;
-    for (let y = startY; y <= wyMax; y += step) {
-      if (Math.abs(y) < step * 0.001) continue;
+    const startY = Math.ceil(wyMin / stepY) * stepY;
+    for (let y = startY; y <= wyMax; y += stepY) {
+      if (Math.abs(y) < stepY * 0.001) continue;
       const [, sy] = worldToScreen(0, y);
       const xLabel = Math.max(24, Math.min(size.w - 4, ax0X - 6));
-      ctx.fillText(fmtTick(y), xLabel, sy);
+      ctx.fillText(fmtTick(y, stepY), xLabel, sy);
     }
     if (ax0X >= 0 && ax0X <= size.w && ax0Y >= 0 && ax0Y <= size.h) {
       ctx.textAlign = 'right';
@@ -869,8 +877,8 @@ function PlotCanvas({
       const dy = e.clientY - draggingRef.current.y;
       setView({
         ...draggingRef.current.view,
-        cx: draggingRef.current.view.cx - dx / view.scale,
-        cy: draggingRef.current.view.cy + dy / view.scale,
+        cx: draggingRef.current.view.cx - dx / draggingRef.current.view.scaleX,
+        cy: draggingRef.current.view.cy + dy / draggingRef.current.view.scaleY,
       });
       setMouse(null);
       return;
@@ -889,17 +897,29 @@ function PlotCanvas({
     setMouse(null);
   };
 
+  const zoomAroundPoint = useCallback((baseView, screenX, screenY, factorX, factorY) => {
+    const sourceView = sanitizeView(baseView);
+    const wxBefore = sourceView.cx + (screenX - size.w / 2) / sourceView.scaleX;
+    const wyBefore = sourceView.cy - (screenY - size.h / 2) / sourceView.scaleY;
+    const scaleX = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, sourceView.scaleX * factorX));
+    const scaleY = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, sourceView.scaleY * factorY));
+    setView({
+      cx: wxBefore - (screenX - size.w / 2) / scaleX,
+      cy: wyBefore + (screenY - size.h / 2) / scaleY,
+      scaleX,
+      scaleY,
+    });
+  }, [setView, size.h, size.w]);
+
   const onWheel = (e) => {
     e.preventDefault();
     const rect = canvasRef.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
-    const [wxBefore, wyBefore] = screenToWorld(mx, my);
     const factor = Math.exp(-e.deltaY * 0.0015);
-    const newScale = Math.max(0.5, Math.min(8000, view.scale * factor));
-    const newCx = wxBefore - (mx - size.w / 2) / newScale;
-    const newCy = wyBefore + (my - size.h / 2) / newScale;
-    setView({ cx: newCx, cy: newCy, scale: newScale });
+    const xOnly = e.shiftKey && !e.altKey;
+    const yOnly = e.altKey && !e.shiftKey;
+    zoomAroundPoint(view, mx, my, xOnly ? factor : yOnly ? 1 : factor, yOnly ? factor : xOnly ? 1 : factor);
   };
 
   const onTouchStart = (e) => {
@@ -915,7 +935,8 @@ function PlotCanvas({
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
       pinchRef.current = {
         dist,
-        scale: view.scale,
+        scaleX: view.scaleX,
+        scaleY: view.scaleY,
         cx: view.cx,
         cy: view.cy,
         midX: (t1.clientX + t2.clientX) / 2 - rect.left,
@@ -934,22 +955,21 @@ function PlotCanvas({
       const dy = t.clientY - draggingRef.current.y;
       setView({
         ...draggingRef.current.view,
-        cx: draggingRef.current.view.cx - dx / view.scale,
-        cy: draggingRef.current.view.cy + dy / view.scale,
+        cx: draggingRef.current.view.cx - dx / draggingRef.current.view.scaleX,
+        cy: draggingRef.current.view.cy + dy / draggingRef.current.view.scaleY,
       });
       setMouse({ x: t.clientX - rect.left, y: t.clientY - rect.top });
     } else if (e.touches.length === 2 && pinchRef.current) {
       const [t1, t2] = e.touches;
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
       const factor = dist / pinchRef.current.dist;
-      const newScale = Math.max(0.5, Math.min(8000, pinchRef.current.scale * factor));
-      const mx = pinchRef.current.midX;
-      const my = pinchRef.current.midY;
-      const wxBefore = pinchRef.current.cx + (mx - size.w / 2) / pinchRef.current.scale;
-      const wyBefore = pinchRef.current.cy - (my - size.h / 2) / pinchRef.current.scale;
-      const newCx = wxBefore - (mx - size.w / 2) / newScale;
-      const newCy = wyBefore + (my - size.h / 2) / newScale;
-      setView({ cx: newCx, cy: newCy, scale: newScale });
+      zoomAroundPoint(
+        pinchRef.current,
+        pinchRef.current.midX,
+        pinchRef.current.midY,
+        factor,
+        factor,
+      );
     }
   };
 
@@ -1139,11 +1159,12 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly, selected, onSelect
   );
 }
 
-function SidebarButton({ children, onClick, theme }) {
+function SidebarButton({ children, onClick, theme, ...buttonProps }) {
   const [hover, setHover] = useState(false);
   return (
     <button
       onClick={onClick}
+      {...buttonProps}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
@@ -1249,7 +1270,14 @@ function ExpandedSidebarInner({
   };
 
   const deleteFn = (idx) => setFunctions(functions.filter((_, i) => i !== idx));
-  const resetView = () => setView({ cx: 0, cy: 0, scale: 50 });
+  const scaleView = (factorX, factorY) => {
+    setView((current) => sanitizeView({
+      ...current,
+      scaleX: current.scaleX * factorX,
+      scaleY: current.scaleY * factorY,
+    }));
+  };
+  const resetView = () => setView(DEFAULT_VIEW);
 
   useEffect(() => {
     if (!themeMenuOpen) return;
@@ -1486,11 +1514,26 @@ function ExpandedSidebarInner({
           )}
         </div>
 
+        <div style={{
+          padding: '8px 16px 0 16px',
+          color: theme.muted,
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: 10,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+        }}>
+          X scale {formatDecimalNumber(view.scaleX)} · Y scale {formatDecimalNumber(view.scaleY)}
+        </div>
+
         <div style={{ padding: '10px 16px 12px 16px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <SidebarButton theme={theme} onClick={() => setView({ ...view, scale: Math.min(8000, view.scale * 1.4) })}>Zoom +</SidebarButton>
-          <SidebarButton theme={theme} onClick={() => setView({ ...view, scale: Math.max(0.5, view.scale / 1.4) })}>Zoom −</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1.4, 1.4)}>Zoom +</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1 / 1.4, 1 / 1.4)}>Zoom −</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1.4, 1)} title="Expand the x-axis only">X +</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1 / 1.4, 1)} title="Compress the x-axis only">X −</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1, 1.4)} title="Expand the y-axis only">Y +</SidebarButton>
+          <SidebarButton theme={theme} onClick={() => scaleView(1, 1 / 1.4)} title="Compress the y-axis only">Y −</SidebarButton>
           <SidebarButton theme={theme} onClick={onFitView}>Fit data</SidebarButton>
-          <SidebarButton theme={theme} onClick={() => setView({ cx: 0, cy: 0, scale: 50 })}>Reset</SidebarButton>
+          <SidebarButton theme={theme} onClick={resetView}>Reset</SidebarButton>
           <SidebarButton theme={theme} onClick={onExport}>Export PNG</SidebarButton>
         </div>
       </div>
