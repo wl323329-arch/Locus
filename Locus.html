@@ -148,12 +148,53 @@
 
 <script>
 (function () {
-  const TOKEN = { NUM: 'NUM', ID: 'ID', OP: 'OP', LP: 'LP', RP: 'RP', COMMA: 'COMMA', END: 'END' };
+  const TOKEN = {
+    NUM: 'NUM', ID: 'ID', OP: 'OP', LP: 'LP', RP: 'RP',
+    COMMA: 'COMMA', QMARK: 'QMARK', COLON: 'COLON', END: 'END',
+  };
+  const COORDINATE_VARS = new Set(['x', 'y', 't', 'theta']);
+  const normalizeInput = (src) => (src || '')
+    .replace(/θ/gu, 'theta')
+    .replace(/π/gu, 'pi')
+    .replace(/≤/gu, '<=')
+    .replace(/≥/gu, '>=')
+    .replace(/≠/gu, '!=')
+    .replace(/∈/gu, 'in');
+  function splitTopLevel(src, separator = ';') {
+    const parts = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
+      else if (ch === separator && depth === 0) {
+        parts.push(src.slice(start, i));
+        start = i + 1;
+      }
+    }
+    parts.push(src.slice(start));
+    return parts.map(part => part.trim()).filter(Boolean);
+  }
+  function parseRangeStatement(src) {
+    const match = src.match(/^(x|y|t|theta)\s+in\s+\[\s*(.+)\s*,\s*(.+)\s*\]$/u);
+    if (!match) return null;
+    return { variable: match[1], min: match[2], max: match[3] };
+  }
+  function parseAssignmentStatement(src) {
+    const match = src.match(/^([A-Za-z_][A-Za-z_0-9]*)(?:\(\s*([A-Za-z_][A-Za-z_0-9]*)\s*\))?\s*=\s*(.+)$/u);
+    if (!match) return null;
+    return { target: match[1], parameter: match[2] || null, expr: match[3].trim() };
+  }
   function tokenize(src) {
     const t = []; let i = 0;
     while (i < src.length) {
       const c = src[i];
       if (/\s/.test(c)) { i++; continue; }
+      const two = src.slice(i, i + 2);
+      if (['<=', '>=', '==', '!=', '&&', '||'].includes(two)) {
+        t.push({ k: TOKEN.OP, v: two }); i += 2; continue;
+      }
       if (/[0-9.]/.test(c)) {
         let j = i;
         while (j < src.length && /[0-9.]/.test(src[j])) j++;
@@ -168,10 +209,12 @@
         while (j < src.length && /[A-Za-z_0-9]/.test(src[j])) j++;
         t.push({ k: TOKEN.ID, v: src.slice(i, j) }); i = j; continue;
       }
-      if ('+-*/^%'.includes(c)) { t.push({ k: TOKEN.OP, v: c }); i++; continue; }
+      if ('+-*/^%<>!'.includes(c)) { t.push({ k: TOKEN.OP, v: c }); i++; continue; }
       if (c === '(') { t.push({ k: TOKEN.LP }); i++; continue; }
       if (c === ')') { t.push({ k: TOKEN.RP }); i++; continue; }
       if (c === ',') { t.push({ k: TOKEN.COMMA }); i++; continue; }
+      if (c === '?') { t.push({ k: TOKEN.QMARK }); i++; continue; }
+      if (c === ':') { t.push({ k: TOKEN.COLON }); i++; continue; }
       if (c === '=') { t.push({ k: TOKEN.OP, v: '=' }); i++; continue; }
       throw new Error('Unexpected character: ' + c);
     }
@@ -181,7 +224,42 @@
     const tokens = tokenize(src); let p = 0;
     const peek = () => tokens[p];
     const eat = (k) => { const t = tokens[p]; if (t.k !== k) throw new Error('Unexpected token'); p++; return t; };
-    function expr() { return addsub(); }
+    function expr() { return conditional(); }
+    function conditional() {
+      let left = logicalOr();
+      if (peek().k === TOKEN.QMARK) {
+        p++;
+        const yes = expr();
+        eat(TOKEN.COLON);
+        const no = expr();
+        left = { op: '?:', test: left, yes, no };
+      }
+      return left;
+    }
+    function logicalOr() {
+      let left = logicalAnd();
+      while (peek().k === TOKEN.OP && peek().v === '||') {
+        p++;
+        left = { op: '||', left, right: logicalAnd() };
+      }
+      return left;
+    }
+    function logicalAnd() {
+      let left = compare();
+      while (peek().k === TOKEN.OP && peek().v === '&&') {
+        p++;
+        left = { op: '&&', left, right: compare() };
+      }
+      return left;
+    }
+    function compare() {
+      let left = addsub();
+      while (peek().k === TOKEN.OP && ['<', '>', '<=', '>=', '==', '!='].includes(peek().v)) {
+        const op = tokens[p++].v;
+        left = { op, left, right: addsub() };
+      }
+      return left;
+    }
     function addsub() {
       let left = muldiv();
       while (peek().k === TOKEN.OP && (peek().v === '+' || peek().v === '-')) {
@@ -202,6 +280,7 @@
     function unary() {
       if (peek().k === TOKEN.OP && peek().v === '-') { p++; return { op: 'neg', arg: unary() }; }
       if (peek().k === TOKEN.OP && peek().v === '+') { p++; return unary(); }
+      if (peek().k === TOKEN.OP && peek().v === '!') { p++; return { op: 'not', arg: unary() }; }
       return pow();
     }
     function pow() {
@@ -242,16 +321,36 @@
       throw new Error('Unknown: ' + node.id);
     }
     if (node.call !== undefined) {
+      if (node.call === 'if') {
+        if (node.args.length < 2 || node.args.length > 3) throw new Error('if expects 2 or 3 arguments');
+        return evalNode(node.args[0], scope) ? evalNode(node.args[1], scope) : (node.args[2] ? evalNode(node.args[2], scope) : NaN);
+      }
+      if (node.call === 'piecewise') {
+        for (let i = 0; i + 1 < node.args.length; i += 2) {
+          if (evalNode(node.args[i], scope)) return evalNode(node.args[i + 1], scope);
+        }
+        return node.args.length % 2 === 1 ? evalNode(node.args[node.args.length - 1], scope) : NaN;
+      }
       const fn = scope[node.call] || Math[node.call];
       if (typeof fn !== 'function') throw new Error('Not a function: ' + node.call);
       return fn(...node.args.map(a => evalNode(a, scope)));
     }
     if (node.op === 'neg') return -evalNode(node.arg, scope);
+    if (node.op === 'not') return evalNode(node.arg, scope) ? 0 : 1;
+    if (node.op === '?:') return evalNode(node.test, scope) ? evalNode(node.yes, scope) : evalNode(node.no, scope);
     const L = evalNode(node.left, scope); const R = evalNode(node.right, scope);
     switch (node.op) {
       case '+': return L + R; case '-': return L - R;
       case '*': return L * R; case '/': return L / R;
       case '%': return L % R; case '^': return Math.pow(L, R);
+      case '<': return L < R ? 1 : 0;
+      case '>': return L > R ? 1 : 0;
+      case '<=': return L <= R ? 1 : 0;
+      case '>=': return L >= R ? 1 : 0;
+      case '==': return Math.abs(L - R) <= 1e-12 ? 1 : 0;
+      case '!=': return Math.abs(L - R) <= 1e-12 ? 0 : 1;
+      case '&&': return (L && R) ? 1 : 0;
+      case '||': return (L || R) ? 1 : 0;
     }
     throw new Error('Bad op: ' + node.op);
   }
@@ -259,6 +358,7 @@
     ln: Math.log, log: (x, b) => b === undefined ? Math.log10(x) : Math.log(x) / Math.log(b),
     sec: x => 1 / Math.cos(x), csc: x => 1 / Math.sin(x), cot: x => 1 / Math.tan(x),
     pi: Math.PI, e: Math.E, tau: 2 * Math.PI,
+    nan: NaN, min: Math.min, max: Math.max,
   };
 
   function collectVariables(node, vars = new Set()) {
@@ -282,10 +382,134 @@
     return (vars = {}) => evalNode(node, { ...EXTRA, ...vars });
   }
 
+  function collectRangeVariables(rangeStatements) {
+    const vars = new Set();
+    rangeStatements.forEach((range) => {
+      collectVariables(parse(range.min), vars);
+      collectVariables(parse(range.max), vars);
+    });
+    return vars;
+  }
+
+  function buildRangeResolvers(rangeStatements) {
+    return rangeStatements.map((range) => ({
+      variable: range.variable,
+      min: buildEvaluator(parse(range.min)),
+      max: buildEvaluator(parse(range.max)),
+    }));
+  }
+
+  function resolveRanges(rangeResolvers, params = {}) {
+    const resolved = {};
+    rangeResolvers.forEach((range) => {
+      const min = range.min(params);
+      const max = range.max(params);
+      if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+      resolved[range.variable] = min <= max ? { min, max } : { min: max, max: min };
+    });
+    return resolved;
+  }
+
+  function inResolvedRange(value, range) {
+    return !range || (value >= range.min - 1e-9 && value <= range.max + 1e-9);
+  }
+
   window.LocusMath = {
     parse,
     compile(src) {
-      const tree = parse(src);
+      const normalized = normalizeInput(src);
+      const statements = splitTopLevel(normalized);
+      const rangeStatements = [];
+      const expressionStatements = [];
+
+      statements.forEach((statement) => {
+        const range = parseRangeStatement(statement);
+        if (range) {
+          rangeStatements.push(range);
+          return;
+        }
+        expressionStatements.push(statement);
+      });
+
+      const rangeResolvers = buildRangeResolvers(rangeStatements);
+      const rangeParamVars = collectRangeVariables(rangeStatements);
+      const assignments = expressionStatements
+        .map(parseAssignmentStatement)
+        .filter(assignment => assignment && ['x', 'y', 'r'].includes(assignment.target));
+
+      if (
+        expressionStatements.length === 2 &&
+        assignments.length === 2 &&
+        assignments.some((item) => item.target === 'x') &&
+        assignments.some((item) => item.target === 'y')
+      ) {
+        const xAssignment = assignments.find((item) => item.target === 'x');
+        const yAssignment = assignments.find((item) => item.target === 'y');
+        const parameterVar = xAssignment.parameter || yAssignment.parameter || (/\bt\b/u.test(`${xAssignment.expr} ${yAssignment.expr}`) ? 't' : 'theta');
+        const xTree = parse(xAssignment.expr);
+        const yTree = parse(yAssignment.expr);
+        const xEvaluator = buildEvaluator(xTree);
+        const yEvaluator = buildEvaluator(yTree);
+        const vars = new Set([
+          ...collectVariables(xTree),
+          ...collectVariables(yTree),
+          ...rangeParamVars,
+        ]);
+        vars.delete(parameterVar);
+        vars.delete('x');
+        vars.delete('y');
+        return {
+          kind: 'parametric',
+          parameterVar,
+          parameters: [...vars].filter(name => !(name in EXTRA) && !(name in Math)),
+          ranges: rangeResolvers,
+          getRanges: (params = {}) => resolveRanges(rangeResolvers, params),
+          evaluate: (parameterValue, params = {}) => {
+            const scope = { ...params, [parameterVar]: parameterValue };
+            const ranges = resolveRanges(rangeResolvers, scope);
+            if (!inResolvedRange(parameterValue, ranges[parameterVar])) return null;
+            const x = xEvaluator(scope);
+            const y = yEvaluator(scope);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            if (!inResolvedRange(x, ranges.x) || !inResolvedRange(y, ranges.y)) return null;
+            return { x, y, parameterValue };
+          },
+        };
+      }
+
+      if (expressionStatements.length === 1 && assignments.length === 1 && assignments[0].target === 'r') {
+        const rAssignment = assignments[0];
+        const parameterVar = rAssignment.parameter || 'theta';
+        const rTree = parse(rAssignment.expr);
+        const rEvaluator = buildEvaluator(rTree);
+        const vars = new Set([...collectVariables(rTree), ...rangeParamVars]);
+        vars.delete(parameterVar);
+        vars.delete('r');
+        return {
+          kind: 'polar',
+          parameterVar,
+          parameters: [...vars].filter(name => !(name in EXTRA) && !(name in Math)),
+          ranges: rangeResolvers,
+          getRanges: (params = {}) => resolveRanges(rangeResolvers, params),
+          evaluate: (parameterValue, params = {}) => {
+            const scope = { ...params, [parameterVar]: parameterValue };
+            const ranges = resolveRanges(rangeResolvers, scope);
+            if (!inResolvedRange(parameterValue, ranges[parameterVar])) return null;
+            const radius = rEvaluator(scope);
+            if (!Number.isFinite(radius)) return null;
+            const x = radius * Math.cos(parameterValue);
+            const y = radius * Math.sin(parameterValue);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            if (!inResolvedRange(x, ranges.x) || !inResolvedRange(y, ranges.y)) return null;
+            return { x, y, parameterValue, r: radius };
+          },
+        };
+      }
+
+      if (expressionStatements.length > 1) throw new Error('Use semicolons only for x = … ; y = … or range limits');
+      const mainStatement = expressionStatements[0];
+      if (!mainStatement) throw new Error('Missing expression');
+      const tree = parse(mainStatement);
       if (tree.op === '=') {
         const leftVars = collectVariables(tree.left);
         const rightVars = collectVariables(tree.right);
@@ -293,21 +517,46 @@
           const explicit = buildEvaluator(tree.right);
           return {
             kind: 'explicit',
-            evaluate: (x) => explicit({ x }),
+            parameters: [...new Set([...rightVars, ...rangeParamVars])].filter(name => name !== 'x' && !(name in EXTRA) && !(name in Math)),
+            ranges: rangeResolvers,
+            getRanges: (params = {}) => resolveRanges(rangeResolvers, params),
+            evaluate: (x, params = {}) => {
+              const ranges = resolveRanges(rangeResolvers, params);
+              if (!inResolvedRange(x, ranges.x)) return NaN;
+              const y = explicit({ ...params, x });
+              if (!Number.isFinite(y)) return NaN;
+              return inResolvedRange(y, ranges.y) ? y : NaN;
+            },
           };
         }
         if (tree.right.id === 'y' && !leftVars.has('y')) {
           const explicit = buildEvaluator(tree.left);
           return {
             kind: 'explicit',
-            evaluate: (x) => explicit({ x }),
+            parameters: [...new Set([...leftVars, ...rangeParamVars])].filter(name => name !== 'x' && !(name in EXTRA) && !(name in Math)),
+            ranges: rangeResolvers,
+            getRanges: (params = {}) => resolveRanges(rangeResolvers, params),
+            evaluate: (x, params = {}) => {
+              const ranges = resolveRanges(rangeResolvers, params);
+              if (!inResolvedRange(x, ranges.x)) return NaN;
+              const y = explicit({ ...params, x });
+              if (!Number.isFinite(y)) return NaN;
+              return inResolvedRange(y, ranges.y) ? y : NaN;
+            },
           };
         }
         const left = buildEvaluator(tree.left);
         const right = buildEvaluator(tree.right);
         return {
           kind: 'implicit',
-          evaluate: (x, y) => left({ x, y }) - right({ x, y }),
+          parameters: [...new Set([...leftVars, ...rightVars, ...rangeParamVars])].filter(name => !['x', 'y'].includes(name) && !(name in EXTRA) && !(name in Math)),
+          ranges: rangeResolvers,
+          getRanges: (params = {}) => resolveRanges(rangeResolvers, params),
+          evaluate: (x, y, params = {}) => {
+            const ranges = resolveRanges(rangeResolvers, params);
+            if (!inResolvedRange(x, ranges.x) || !inResolvedRange(y, ranges.y)) return NaN;
+            return left({ ...params, x, y }) - right({ ...params, x, y });
+          },
         };
       }
 
@@ -316,12 +565,28 @@
       if (vars.has('y')) {
         return {
           kind: 'implicit',
-          evaluate: (x, y) => evaluate({ x, y }),
+          parameters: [...new Set([...vars, ...rangeParamVars])].filter(name => !['x', 'y'].includes(name) && !(name in EXTRA) && !(name in Math)),
+          ranges: rangeResolvers,
+          getRanges: (params = {}) => resolveRanges(rangeResolvers, params),
+          evaluate: (x, y, params = {}) => {
+            const ranges = resolveRanges(rangeResolvers, params);
+            if (!inResolvedRange(x, ranges.x) || !inResolvedRange(y, ranges.y)) return NaN;
+            return evaluate({ ...params, x, y });
+          },
         };
       }
       return {
         kind: 'explicit',
-        evaluate: (x) => evaluate({ x }),
+        parameters: [...new Set([...vars, ...rangeParamVars])].filter(name => name !== 'x' && !(name in EXTRA) && !(name in Math)),
+        ranges: rangeResolvers,
+        getRanges: (params = {}) => resolveRanges(rangeResolvers, params),
+        evaluate: (x, params = {}) => {
+          const ranges = resolveRanges(rangeResolvers, params);
+          if (!inResolvedRange(x, ranges.x)) return NaN;
+          const y = evaluate({ ...params, x });
+          if (!Number.isFinite(y)) return NaN;
+          return inResolvedRange(y, ranges.y) ? y : NaN;
+        },
       };
     },
   };
@@ -403,6 +668,24 @@ const COORD_MODES = {
   exact: 'exact',
   decimal: 'decimal',
 };
+
+function defaultParameterConfig(name) {
+  const centered = new Set(['h', 'k', 'm', 'n']);
+  const value = centered.has(name) ? 0 : 1;
+  return { value, min: -10, max: 10, step: 0.1 };
+}
+
+function sanitizeParameterConfig(config, fallback = defaultParameterConfig('a')) {
+  const next = { ...fallback, ...(config || {}) };
+  const value = Number.isFinite(+next.value) ? +next.value : fallback.value;
+  let min = Number.isFinite(+next.min) ? +next.min : fallback.min;
+  let max = Number.isFinite(+next.max) ? +next.max : fallback.max;
+  const step = Number.isFinite(+next.step) && +next.step > 0 ? +next.step : fallback.step;
+  if (min > max) [min, max] = [max, min];
+  if (value < min) min = value;
+  if (value > max) max = value;
+  return { value, min, max, step };
+}
 
 function gcd(a, b) {
   a = Math.abs(a); b = Math.abs(b);
@@ -519,6 +802,10 @@ const EXPR_CONSTANT_NAMES = new Set(['pi', 'e', 'tau']);
 function inferCurveKindFromExpr(expr) {
   const compact = (expr || '').replace(/\s+/g, '');
   if (!compact) return 'explicit';
+  if (/x(?:\(t(?:heta)?\))?=.+;y(?:\(t(?:heta)?\))?=.+/iu.test(compact) || /y(?:\(t(?:heta)?\))?=.+;x(?:\(t(?:heta)?\))?=.+/iu.test(compact)) {
+    return 'parametric';
+  }
+  if (/r(?:\(theta\))?=.+/iu.test(compact)) return 'polar';
   if (compact.includes('y')) {
     if (/^y=.+$/u.test(compact) || /^.+=y$/u.test(compact)) return 'explicit';
     return 'implicit';
@@ -586,6 +873,8 @@ function humanizeError(msg) {
   if (msg.startsWith('Unexpected character: ')) return 'Unexpected character "' + msg.slice(22) + '"';
   if (msg.includes('Unexpected token')) return 'Check syntax near an operator';
   if (msg.includes('Trailing tokens')) return 'Extra characters at end';
+  if (msg.includes('piecewise')) return 'piecewise expects condition/value pairs';
+  if (msg.includes('if expects')) return 'if(condition, whenTrue, whenFalse)';
   if (msg.startsWith('Bad op: ')) return 'Unsupported operator';
   return msg;
 }
@@ -599,19 +888,62 @@ function evaluateSafe(fn, x) {
   }
 }
 
-function evaluateExplicitSafe(compiled, x) {
+function evaluateExplicitSafe(compiled, x, params = {}) {
   if (!compiled || compiled.kind !== 'explicit') return NaN;
-  return evaluateSafe(compiled.evaluate, x);
+  try {
+    const y = compiled.evaluate(x, params);
+    return Number.isFinite(y) ? y : NaN;
+  } catch {
+    return NaN;
+  }
 }
 
-function evaluateImplicitSafe(compiled, x, y) {
+function evaluateImplicitSafe(compiled, x, y, params = {}) {
   if (!compiled || compiled.kind !== 'implicit') return NaN;
   try {
-    const value = compiled.evaluate(x, y);
+    const value = compiled.evaluate(x, y, params);
     return Number.isFinite(value) ? value : NaN;
   } catch {
     return NaN;
   }
+}
+
+function evaluateCurvePointSafe(compiled, parameterValue, params = {}) {
+  if (!compiled || !['parametric', 'polar'].includes(compiled.kind)) return null;
+  try {
+    const point = compiled.evaluate(parameterValue, params);
+    if (!point) return null;
+    return Number.isFinite(point.x) && Number.isFinite(point.y) ? point : null;
+  } catch {
+    return null;
+  }
+}
+
+function getResolvedRanges(compiled, params = {}) {
+  if (!compiled?.getRanges) return {};
+  try {
+    return compiled.getRanges(params) || {};
+  } catch {
+    return {};
+  }
+}
+
+function getCurveAxisRange(compiled, axis, fallbackMin, fallbackMax, params = {}) {
+  const range = getResolvedRanges(compiled, params)[axis];
+  if (!range) return { min: fallbackMin, max: fallbackMax };
+  return {
+    min: Math.max(fallbackMin, range.min),
+    max: Math.min(fallbackMax, range.max),
+  };
+}
+
+function getCurveParameterRange(compiled, params = {}) {
+  const ranges = getResolvedRanges(compiled, params);
+  const axis = compiled?.parameterVar || 't';
+  const fallback = compiled?.kind === 'polar' || axis === 'theta'
+    ? { min: 0, max: Math.PI * 2 }
+    : { min: -10, max: 10 };
+  return ranges[axis] || fallback;
 }
 
 function bisectRoot(fn, left, right, maxIter = 32) {
@@ -655,6 +987,69 @@ function getImplicitSampleGrid(width, height) {
     cols: Math.max(48, Math.min(220, Math.ceil(width / 8))),
     rows: Math.max(36, Math.min(180, Math.ceil(height / 8))),
   };
+}
+
+function samplePolylineWorldPoints(fn, bounds, sampleCount, params = {}) {
+  if (!fn?.compiled) return [];
+  const compiled = fn.compiled;
+  const points = [];
+  if (compiled.kind === 'explicit') {
+    const range = getCurveAxisRange(compiled, 'x', bounds.wxMin, bounds.wxMax, params);
+    if (!Number.isFinite(range.min) || !Number.isFinite(range.max) || range.max <= range.min) return points;
+    for (let i = 0; i <= sampleCount; i++) {
+      const x = range.min + (range.max - range.min) * (i / sampleCount);
+      const y = evaluateExplicitSafe(compiled, x, params);
+      points.push(Number.isFinite(y) ? { x, y, parameterValue: x } : null);
+    }
+    return points;
+  }
+  if (compiled.kind === 'parametric' || compiled.kind === 'polar') {
+    const range = getCurveParameterRange(compiled, params);
+    if (!Number.isFinite(range.min) || !Number.isFinite(range.max) || range.max <= range.min) return points;
+    for (let i = 0; i <= sampleCount; i++) {
+      const parameterValue = range.min + (range.max - range.min) * (i / sampleCount);
+      const point = evaluateCurvePointSafe(compiled, parameterValue, params);
+      points.push(point ? { ...point, parameterValue } : null);
+    }
+    return points;
+  }
+  return points;
+}
+
+function buildVisiblePolylineCurves(functions, bounds, sampleCount, worldToScreen, size, params = {}) {
+  return functions
+    .filter(fn => fn.visible && fn.compiled && ['explicit', 'parametric', 'polar'].includes(fn.compiled.kind))
+    .map((fn) => {
+      const samples = samplePolylineWorldPoints(fn, bounds, sampleCount, params);
+      const segments = [];
+      let previous = null;
+      let anchor = null;
+      samples.forEach((sample) => {
+        if (!sample) {
+          previous = null;
+          return;
+        }
+        const [sx, sy] = worldToScreen(sample.x, sample.y);
+        const next = { ...sample, sx, sy };
+        if (
+          sx >= -24 && sx <= size.w + 24 && sy >= -24 && sy <= size.h + 24 &&
+          (!anchor || sx > anchor.sx)
+        ) anchor = { sx, sy };
+        if (previous) {
+          const dist = Math.hypot(sx - previous.sx, sy - previous.sy);
+          if (Math.abs(sy - previous.sy) <= size.h * 1.5 && dist <= Math.max(size.w, size.h) * 1.5) {
+            segments.push({
+              ax: previous.x, ay: previous.y, bx: sample.x, by: sample.y,
+              asx: previous.sx, asy: previous.sy, bsx: sx, bsy: sy,
+              aParam: previous.parameterValue, bParam: sample.parameterValue,
+            });
+          }
+        }
+        previous = next;
+      });
+      return { ...fn, segments, anchor };
+    })
+    .filter(fn => fn.segments.length);
 }
 
 function scanRoots(fn, xMin, xMax, sampleCount, yTol) {
@@ -725,10 +1120,39 @@ function scanExtrema(fn, xMin, xMax, sampleCount) {
   return extrema;
 }
 
-function computeSpecialPoints(featureFunctions, curves, implicitCurves, xMin, xMax, yMin, yMax, scale, width, height) {
+function intersectSegmentCollections(left, right, xTol, yTol) {
+  const points = [];
+  left.segments.forEach((segmentA) => {
+    right.segments.forEach((segmentB) => {
+      if (
+        Math.max(segmentA.ax, segmentA.bx) < Math.min(segmentB.ax, segmentB.bx) - xTol ||
+        Math.max(segmentB.ax, segmentB.bx) < Math.min(segmentA.ax, segmentA.bx) - xTol ||
+        Math.max(segmentA.ay, segmentA.by) < Math.min(segmentB.ay, segmentB.by) - yTol ||
+        Math.max(segmentB.ay, segmentB.by) < Math.min(segmentA.ay, segmentA.by) - yTol
+      ) return;
+      const hit = segmentIntersection(segmentA, segmentB, Math.max(xTol, yTol) * 0.25);
+      if (!hit || !Number.isFinite(hit.x) || !Number.isFinite(hit.y)) return;
+      points.push({
+        type: 'intersection',
+        x: hit.x,
+        y: hit.y,
+        color: left.color,
+        color2: right.color,
+        fnId: left.id,
+        fn2Id: right.id,
+        label: left.label,
+        label2: right.label,
+      });
+    });
+  });
+  return points;
+}
+
+function computeSpecialPoints(featureFunctions, curves, polylineCurves, implicitCurves, xMin, xMax, yMin, yMax, scale, width, height, params = {}) {
   const visibleExplicit = curves.filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit');
+  const sampledCurves = polylineCurves || [];
   const visibleImplicit = implicitCurves || [];
-  if (!visibleExplicit.length && !visibleImplicit.length) return [];
+  if (!sampledCurves.length && !visibleImplicit.length) return [];
   if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || xMax <= xMin) return [];
   const sampleCount = Math.max(320, Math.min(1600, Math.floor(width * 1.5)));
   const yTol = Math.max(1e-6, 6 / scale);
@@ -738,14 +1162,16 @@ function computeSpecialPoints(featureFunctions, curves, implicitCurves, xMin, xM
   featureFunctions
     .filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit')
     .forEach((fn) => {
-    const zeros = scanRoots(fn.compiled.evaluate, xMin, xMax, sampleCount, yTol);
+    const domain = getCurveAxisRange(fn.compiled, 'x', xMin, xMax, params);
+    const evaluator = (x) => evaluateExplicitSafe(fn.compiled, x, params);
+    const zeros = scanRoots(evaluator, domain.min, domain.max, sampleCount, yTol);
     zeros.forEach((x) => {
       points.push({
         type: 'zero', x, y: 0,
         color: fn.color, fnId: fn.id, label: fn.label,
       });
     });
-    const extrema = scanExtrema(fn.compiled.evaluate, xMin, xMax, Math.min(sampleCount, 900));
+    const extrema = scanExtrema(evaluator, domain.min, domain.max, Math.min(sampleCount, 900));
     extrema.forEach(({ x, y, type }) => {
       points.push({
         type, x, y,
@@ -756,12 +1182,22 @@ function computeSpecialPoints(featureFunctions, curves, implicitCurves, xMin, xM
 
   for (let i = 0; i < visibleExplicit.length; i++) {
     for (let j = i + 1; j < visibleExplicit.length; j++) {
-      const leftFn = visibleExplicit[i].compiled.evaluate;
-      const rightFn = visibleExplicit[j].compiled.evaluate;
-      const diff = (x) => leftFn(x) - rightFn(x);
-      const roots = scanRoots(diff, xMin, xMax, sampleCount, yTol);
+      const overlapMin = Math.max(
+        getCurveAxisRange(visibleExplicit[i].compiled, 'x', xMin, xMax, params).min,
+        getCurveAxisRange(visibleExplicit[j].compiled, 'x', xMin, xMax, params).min,
+      );
+      const overlapMax = Math.min(
+        getCurveAxisRange(visibleExplicit[i].compiled, 'x', xMin, xMax, params).max,
+        getCurveAxisRange(visibleExplicit[j].compiled, 'x', xMin, xMax, params).max,
+      );
+      if (!(overlapMax > overlapMin)) continue;
+      const diff = (x) => (
+        evaluateExplicitSafe(visibleExplicit[i].compiled, x, params) -
+        evaluateExplicitSafe(visibleExplicit[j].compiled, x, params)
+      );
+      const roots = scanRoots(diff, overlapMin, overlapMax, sampleCount, yTol);
       roots.forEach((x) => {
-        const y = evaluateSafe(leftFn, x);
+        const y = evaluateExplicitSafe(visibleExplicit[i].compiled, x, params);
         if (!Number.isFinite(y)) return;
         points.push({
           type: 'intersection', x, y,
@@ -773,37 +1209,21 @@ function computeSpecialPoints(featureFunctions, curves, implicitCurves, xMin, xM
     }
   }
 
-  visibleExplicit.forEach((explicitFn) => {
-    visibleImplicit.forEach((implicitFn) => {
-      const diff = (x) => {
-        const y = evaluateSafe(explicitFn.compiled.evaluate, x);
-        if (!Number.isFinite(y)) return NaN;
-        return evaluateImplicitSafe(implicitFn.compiled, x, y);
-      };
-      const roots = scanRoots(diff, xMin, xMax, sampleCount, yTol);
-      roots.forEach((x) => {
-        const y = evaluateSafe(explicitFn.compiled.evaluate, x);
-        if (!Number.isFinite(y)) return;
-        points.push({
-          type: 'intersection',
-          x,
-          y,
-          color: explicitFn.color,
-          color2: implicitFn.color,
-          fnId: explicitFn.id,
-          fn2Id: implicitFn.id,
-          label: explicitFn.label,
-          label2: implicitFn.label,
-        });
-      });
-    });
-  });
-
   points.push(...intersectImplicitCurves(
     visibleImplicit,
     xTol,
     Math.max(yTol, (yMax - yMin) / Math.max(120, height)),
+    params,
   ));
+
+  const genericCurves = [...sampledCurves, ...visibleImplicit];
+  for (let i = 0; i < genericCurves.length; i++) {
+    for (let j = i + 1; j < genericCurves.length; j++) {
+      if (genericCurves[i].compiled.kind === 'explicit' && genericCurves[j].compiled.kind === 'explicit') continue;
+      if (genericCurves[i].compiled.kind === 'implicit' && genericCurves[j].compiled.kind === 'implicit') continue;
+      points.push(...intersectSegmentCollections(genericCurves[i], genericCurves[j], xTol, yTol));
+    }
+  }
 
   return dedupePoints(
     points.filter(point => point.y >= yMin - yTol * 4 && point.y <= yMax + yTol * 4),
@@ -819,19 +1239,23 @@ function interpolateIsoPoint(a, b, fa, fb) {
   return a + (b - a) * t;
 }
 
-function sampleImplicitSegments(compiled, bounds, cols, rows) {
+function sampleImplicitSegments(compiled, bounds, cols, rows, params = {}) {
   if (!compiled || compiled.kind !== 'implicit') return [];
   const { wxMin, wxMax, wyMin, wyMax } = bounds;
   if (!Number.isFinite(wxMin + wxMax + wyMin + wyMax) || wxMax <= wxMin || wyMax <= wyMin) return [];
   const dx = (wxMax - wxMin) / cols;
   const dy = (wyMax - wyMin) / rows;
+  const ranges = getResolvedRanges(compiled, params);
+  const xRange = ranges.x;
+  const yRange = ranges.y;
   const values = Array.from({ length: rows + 1 }, () => Array(cols + 1).fill(NaN));
 
   for (let row = 0; row <= rows; row++) {
     const y = wyMax - row * dy;
     for (let col = 0; col <= cols; col++) {
       const x = wxMin + col * dx;
-      values[row][col] = evaluateImplicitSafe(compiled, x, y);
+      if ((xRange && (x < xRange.min || x > xRange.max)) || (yRange && (y < yRange.min || y > yRange.max))) continue;
+      values[row][col] = evaluateImplicitSafe(compiled, x, y, params);
     }
   }
 
@@ -879,7 +1303,7 @@ function sampleImplicitSegments(compiled, bounds, cols, rows) {
       }
       if (hits.length !== 4) continue;
 
-      const center = evaluateImplicitSafe(compiled, (xLeft + xRight) / 2, (yTop + yBottom) / 2);
+      const center = evaluateImplicitSafe(compiled, (xLeft + xRight) / 2, (yTop + yBottom) / 2, params);
       const centerMatchesTL = center >= 0 ? tl >= 0 : tl < 0;
       if (centerMatchesTL) {
         pushSegment(points.top, points.right);
@@ -894,10 +1318,10 @@ function sampleImplicitSegments(compiled, bounds, cols, rows) {
   return segments;
 }
 
-function sampleVisibleImplicitCurves(functions, bounds, cols, rows) {
+function sampleVisibleImplicitCurves(functions, bounds, cols, rows, params = {}) {
   return functions
     .filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'implicit')
-    .map(fn => ({ ...fn, segments: sampleImplicitSegments(fn.compiled, bounds, cols, rows) }))
+    .map(fn => ({ ...fn, segments: sampleImplicitSegments(fn.compiled, bounds, cols, rows, params) }))
     .filter(fn => fn.segments.length);
 }
 
@@ -934,25 +1358,25 @@ function segmentIntersection(a, b, epsilon = 1e-9) {
   };
 }
 
-function refineImplicitIntersection(leftCompiled, rightCompiled, seedX, seedY) {
+function refineImplicitIntersection(leftCompiled, rightCompiled, seedX, seedY, params = {}) {
   let x = seedX;
   let y = seedY;
   for (let i = 0; i < 8; i++) {
-    const f = evaluateImplicitSafe(leftCompiled, x, y);
-    const g = evaluateImplicitSafe(rightCompiled, x, y);
+    const f = evaluateImplicitSafe(leftCompiled, x, y, params);
+    const g = evaluateImplicitSafe(rightCompiled, x, y, params);
     if (!Number.isFinite(f) || !Number.isFinite(g)) return null;
     if (Math.max(Math.abs(f), Math.abs(g)) < 1e-8) return { x, y };
 
     const hx = Math.max(1e-4, Math.abs(x) * 1e-4);
     const hy = Math.max(1e-4, Math.abs(y) * 1e-4);
-    const fx1 = evaluateImplicitSafe(leftCompiled, x + hx, y);
-    const fx0 = evaluateImplicitSafe(leftCompiled, x - hx, y);
-    const fy1 = evaluateImplicitSafe(leftCompiled, x, y + hy);
-    const fy0 = evaluateImplicitSafe(leftCompiled, x, y - hy);
-    const gx1 = evaluateImplicitSafe(rightCompiled, x + hx, y);
-    const gx0 = evaluateImplicitSafe(rightCompiled, x - hx, y);
-    const gy1 = evaluateImplicitSafe(rightCompiled, x, y + hy);
-    const gy0 = evaluateImplicitSafe(rightCompiled, x, y - hy);
+    const fx1 = evaluateImplicitSafe(leftCompiled, x + hx, y, params);
+    const fx0 = evaluateImplicitSafe(leftCompiled, x - hx, y, params);
+    const fy1 = evaluateImplicitSafe(leftCompiled, x, y + hy, params);
+    const fy0 = evaluateImplicitSafe(leftCompiled, x, y - hy, params);
+    const gx1 = evaluateImplicitSafe(rightCompiled, x + hx, y, params);
+    const gx0 = evaluateImplicitSafe(rightCompiled, x - hx, y, params);
+    const gy1 = evaluateImplicitSafe(rightCompiled, x, y + hy, params);
+    const gy0 = evaluateImplicitSafe(rightCompiled, x, y - hy, params);
     if (![fx1, fx0, fy1, fy0, gx1, gx0, gy1, gy0].every(Number.isFinite)) return null;
 
     const fx = (fx1 - fx0) / (2 * hx);
@@ -971,13 +1395,13 @@ function refineImplicitIntersection(leftCompiled, rightCompiled, seedX, seedY) {
     if (Math.max(Math.abs(dx), Math.abs(dy)) < 1e-8) break;
   }
 
-  const finalF = evaluateImplicitSafe(leftCompiled, x, y);
-  const finalG = evaluateImplicitSafe(rightCompiled, x, y);
+  const finalF = evaluateImplicitSafe(leftCompiled, x, y, params);
+  const finalG = evaluateImplicitSafe(rightCompiled, x, y, params);
   if (!Number.isFinite(finalF) || !Number.isFinite(finalG)) return null;
   return Math.max(Math.abs(finalF), Math.abs(finalG)) < 1e-5 ? { x, y } : null;
 }
 
-function intersectImplicitCurves(curves, xTol, yTol) {
+function intersectImplicitCurves(curves, xTol, yTol, params = {}) {
   const points = [];
   const decorateSegments = (segments) => segments.map((segment) => ({
     ...segment,
@@ -1003,7 +1427,7 @@ function intersectImplicitCurves(curves, xTol, yTol) {
           ) return;
           const hit = segmentIntersection(segmentA, segmentB, Math.max(xTol, yTol) * 0.25);
           if (!hit || !Number.isFinite(hit.x) || !Number.isFinite(hit.y)) return;
-          const refined = refineImplicitIntersection(left.compiled, right.compiled, hit.x, hit.y) || hit;
+          const refined = refineImplicitIntersection(left.compiled, right.compiled, hit.x, hit.y, params) || hit;
           points.push({
             type: 'intersection',
             x: refined.x,
@@ -1034,23 +1458,23 @@ function closestPointOnSegment(point, a, b) {
   return { x, y, t, dist: Math.hypot(point.x - x, point.y - y) };
 }
 
-function differentiateExplicit(compiled, x, scale) {
+function differentiateExplicit(compiled, x, scale, params = {}) {
   if (!compiled || compiled.kind !== 'explicit') return null;
   const h = Math.max(1e-4, Math.abs(x) * 1e-4, 2 / Math.max(scale, 1));
-  const left = evaluateExplicitSafe(compiled, x - h);
-  const right = evaluateExplicitSafe(compiled, x + h);
+  const left = evaluateExplicitSafe(compiled, x - h, params);
+  const right = evaluateExplicitSafe(compiled, x + h, params);
   if (!Number.isFinite(left) || !Number.isFinite(right)) return null;
   return (right - left) / (2 * h);
 }
 
-function differentiateImplicit(compiled, x, y, scale) {
+function differentiateImplicit(compiled, x, y, scale, params = {}) {
   if (!compiled || compiled.kind !== 'implicit') return null;
   const hx = Math.max(1e-4, Math.abs(x) * 1e-4, 2 / Math.max(scale, 1));
   const hy = Math.max(1e-4, Math.abs(y) * 1e-4, 2 / Math.max(scale, 1));
-  const fx1 = evaluateImplicitSafe(compiled, x + hx, y);
-  const fx0 = evaluateImplicitSafe(compiled, x - hx, y);
-  const fy1 = evaluateImplicitSafe(compiled, x, y + hy);
-  const fy0 = evaluateImplicitSafe(compiled, x, y - hy);
+  const fx1 = evaluateImplicitSafe(compiled, x + hx, y, params);
+  const fx0 = evaluateImplicitSafe(compiled, x - hx, y, params);
+  const fy1 = evaluateImplicitSafe(compiled, x, y + hy, params);
+  const fy0 = evaluateImplicitSafe(compiled, x, y - hy, params);
   if (![fx1, fx0, fy1, fy0].every(Number.isFinite)) return null;
   return {
     fx: (fx1 - fx0) / (2 * hx),
@@ -1058,18 +1482,37 @@ function differentiateImplicit(compiled, x, y, scale) {
   };
 }
 
-function getTangentLine(fn, point, scale) {
+function differentiateSampledCurve(compiled, parameterValue, scale, params = {}) {
+  if (!compiled || !['parametric', 'polar'].includes(compiled.kind)) return null;
+  const h = Math.max(1e-4, Math.abs(parameterValue) * 1e-4, 2 / Math.max(scale, 1));
+  const left = evaluateCurvePointSafe(compiled, parameterValue - h, params);
+  const right = evaluateCurvePointSafe(compiled, parameterValue + h, params);
+  if (!left || !right) return null;
+  return {
+    dx: (right.x - left.x) / (2 * h),
+    dy: (right.y - left.y) / (2 * h),
+  };
+}
+
+function getTangentLine(fn, point, scale, params = {}) {
   if (!fn || !fn.compiled || !point) return null;
   if (fn.compiled.kind === 'explicit') {
-    const slope = differentiateExplicit(fn.compiled, point.x, scale);
+    const slope = differentiateExplicit(fn.compiled, point.x, scale, params);
     if (!Number.isFinite(slope)) return null;
     return { type: 'slope', x: point.x, y: point.y, slope };
   }
-  const gradient = differentiateImplicit(fn.compiled, point.x, point.y, scale);
-  if (!gradient) return null;
-  if (Math.abs(gradient.fx) < 1e-8 && Math.abs(gradient.fy) < 1e-8) return null;
-  if (Math.abs(gradient.fy) < 1e-8) return { type: 'vertical', x: point.x, y: point.y };
-  return { type: 'slope', x: point.x, y: point.y, slope: -gradient.fx / gradient.fy };
+  if (fn.compiled.kind === 'implicit') {
+    const gradient = differentiateImplicit(fn.compiled, point.x, point.y, scale, params);
+    if (!gradient) return null;
+    if (Math.abs(gradient.fx) < 1e-8 && Math.abs(gradient.fy) < 1e-8) return null;
+    if (Math.abs(gradient.fy) < 1e-8) return { type: 'vertical', x: point.x, y: point.y };
+    return { type: 'slope', x: point.x, y: point.y, slope: -gradient.fx / gradient.fy };
+  }
+  const derivative = differentiateSampledCurve(fn.compiled, point.parameterValue, scale, params);
+  if (!derivative) return null;
+  if (Math.abs(derivative.dx) < 1e-8 && Math.abs(derivative.dy) < 1e-8) return null;
+  if (Math.abs(derivative.dx) < 1e-8) return { type: 'vertical', x: point.x, y: point.y };
+  return { type: 'slope', x: point.x, y: point.y, slope: derivative.dy / derivative.dx };
 }
 
 function PlotCanvas({
@@ -1083,6 +1526,7 @@ function PlotCanvas({
   tangentMode,
   tangentPoints,
   onTangentPointsChange,
+  parameters,
 }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
@@ -1138,13 +1582,17 @@ function PlotCanvas({
   }, [screenToWorld, size]);
 
   const implicitGrid = useMemo(() => getImplicitSampleGrid(size.w, size.h), [size.h, size.w]);
+  const polylineSampleCount = useMemo(
+    () => Math.max(320, Math.min(2400, Math.floor(size.w * 2))),
+    [size.w],
+  );
 
   const tangentCurves = useMemo(() => (
     tangentPoints
       .map((tangent) => {
         const owner = functions.find((fn) => fn.id === tangent.fnId);
         if (!owner || !owner.compiled) return null;
-        const tangentLine = getTangentLine(owner, tangent, view.scale);
+        const tangentLine = getTangentLine(owner, tangent, view.scale, parameters);
         if (!tangentLine) return null;
         const label = formatTangentLabel(tangent.seq, owner.label);
         if (tangentLine.type === 'vertical') {
@@ -1185,18 +1633,29 @@ function PlotCanvas({
         };
       })
       .filter(Boolean)
-  ), [functions, tangentPoints, view.scale]);
+  ), [functions, parameters, tangentPoints, view.scale]);
 
   const curveEntities = useMemo(() => [...functions, ...tangentCurves], [functions, tangentCurves]);
+  const sampledPolylineCurves = useMemo(() => (
+    buildVisiblePolylineCurves(
+      curveEntities,
+      worldBounds,
+      polylineSampleCount,
+      worldToScreen,
+      size,
+      parameters,
+    )
+  ), [curveEntities, parameters, polylineSampleCount, size, worldBounds, worldToScreen]);
 
   const implicitCurveSamples = useMemo(() => (
-    sampleVisibleImplicitCurves(curveEntities, worldBounds, implicitGrid.cols, implicitGrid.rows)
-  ), [curveEntities, implicitGrid.cols, implicitGrid.rows, worldBounds]);
+    sampleVisibleImplicitCurves(curveEntities, worldBounds, implicitGrid.cols, implicitGrid.rows, parameters)
+  ), [curveEntities, implicitGrid.cols, implicitGrid.rows, parameters, worldBounds]);
 
   const specialPoints = useMemo(() => (
     computeSpecialPoints(
       functions,
       curveEntities,
+      sampledPolylineCurves,
       implicitCurveSamples,
       worldBounds.wxMin,
       worldBounds.wxMax,
@@ -1205,8 +1664,9 @@ function PlotCanvas({
       view.scale,
       size.w,
       size.h,
+      parameters,
     )
-  ), [curveEntities, functions, implicitCurveSamples, worldBounds, view.scale, size.h, size.w]);
+  ), [curveEntities, functions, implicitCurveSamples, parameters, sampledPolylineCurves, worldBounds, view.scale, size.h, size.w]);
 
   const pointOverlay = useMemo(() => {
     const screenPoints = specialPoints
@@ -1270,12 +1730,36 @@ function PlotCanvas({
     if (!targetFunction || !targetFunction.visible || !targetFunction.compiled) return null;
     if (targetFunction.compiled.kind === 'explicit') {
       const [wx] = screenToWorld(screenPoint.x, screenPoint.y);
-      const y = evaluateExplicitSafe(targetFunction.compiled, wx);
+      const y = evaluateExplicitSafe(targetFunction.compiled, wx, parameters);
       if (!Number.isFinite(y)) return null;
       const [sx, sy] = worldToScreen(wx, y);
       const dist = Math.hypot(sx - screenPoint.x, sy - screenPoint.y);
       if (!allowLoose && dist > 18) return null;
       return { x: wx, y, sx, sy, dist };
+    }
+    if (['parametric', 'polar'].includes(targetFunction.compiled.kind)) {
+      const targetCurve = sampledPolylineCurves.find((fn) => fn.id === functionId);
+      if (!targetCurve) return null;
+      let best = null;
+      targetCurve.segments.forEach((segment) => {
+        const closest = closestPointOnSegment(
+          screenPoint,
+          { x: segment.asx, y: segment.asy },
+          { x: segment.bsx, y: segment.bsy },
+        );
+        if (!best || closest.dist < best.dist) {
+          best = {
+            x: segment.ax + (segment.bx - segment.ax) * closest.t,
+            y: segment.ay + (segment.by - segment.ay) * closest.t,
+            sx: closest.x,
+            sy: closest.y,
+            dist: closest.dist,
+            parameterValue: segment.aParam + (segment.bParam - segment.aParam) * closest.t,
+          };
+        }
+      });
+      if (!allowLoose && best && best.dist > 18) return null;
+      return best;
     }
     const targetImplicitCurve = implicitCurves.find((fn) => fn.id === functionId);
     if (!targetImplicitCurve) return null;
@@ -1298,7 +1782,7 @@ function PlotCanvas({
     });
     if (!allowLoose && best && best.dist > 18) return null;
     return best;
-  }, [functions, implicitCurves, screenToWorld, worldToScreen]);
+  }, [functions, implicitCurves, parameters, sampledPolylineCurves, screenToWorld, worldToScreen]);
 
   const tangentHandles = useMemo(() => (
     tangentPoints
@@ -1317,12 +1801,33 @@ function PlotCanvas({
     let best = null;
     curveEntities.forEach((fn) => {
       if (!fn.visible || !fn.compiled || fn.compiled.kind !== 'explicit') return;
-      const y = evaluateExplicitSafe(fn.compiled, wx);
+      const y = evaluateExplicitSafe(fn.compiled, wx, parameters);
       if (!Number.isFinite(y)) return;
       const [, sy] = worldToScreen(wx, y);
       const dist = Math.abs(sy - mouse.y);
       if (!best || dist < best.dist) best = { fn, x: wx, y, sx: mouse.x, sy, dist };
     });
+    sampledPolylineCurves
+      .filter((fn) => fn.compiled.kind !== 'explicit')
+      .forEach((fn) => {
+        fn.segments.forEach((segment) => {
+          const closest = closestPointOnSegment(
+            mouse,
+            { x: segment.asx, y: segment.asy },
+            { x: segment.bsx, y: segment.bsy },
+          );
+          if (!best || closest.dist < best.dist) {
+            best = {
+              fn,
+              x: segment.ax + (segment.bx - segment.ax) * closest.t,
+              y: segment.ay + (segment.by - segment.ay) * closest.t,
+              sx: closest.x,
+              sy: closest.y,
+              dist: closest.dist,
+            };
+          }
+        });
+      });
     implicitCurves.forEach((fn) => {
       fn.segments.forEach((segment) => {
         const closest = closestPointOnSegment(
@@ -1343,7 +1848,7 @@ function PlotCanvas({
       });
     });
     return best && best.dist <= 26 ? best : null;
-  }, [mouse, curveEntities, implicitCurves, worldToScreen, screenToWorld]);
+  }, [mouse, curveEntities, implicitCurves, parameters, sampledPolylineCurves, worldToScreen, screenToWorld]);
 
   const visiblePoint = pointOverlay.snappedPoint && pointOverlay.snappedPoint.key === revealedPointKey
     ? pointOverlay.snappedPoint
@@ -1473,30 +1978,19 @@ function PlotCanvas({
     }
 
     const labelAnchors = [];
-    curveEntities.forEach((fn) => {
-      if (!fn.visible || !fn.compiled || fn.compiled.kind !== 'explicit') return;
+    sampledPolylineCurves.forEach((fn) => {
       ctx.strokeStyle = fn.color;
       ctx.lineWidth = fn.thickness || 2;
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
       ctx.setLineDash(fn.dash || []);
       ctx.beginPath();
-      const samples = size.w * 2;
-      let prev = null;
-      let lastGood = null;
-      for (let i = 0; i <= samples; i++) {
-        const sx = (i / samples) * size.w;
-        const [wx] = screenToWorld(sx, 0);
-        const wy = evaluateExplicitSafe(fn.compiled, wx);
-        if (!isFinite(wy)) { prev = null; continue; }
-        const [, sy] = worldToScreen(wx, wy);
-        if (prev && Math.abs(sy - prev[1]) > size.h * 1.5) prev = null;
-        if (prev == null) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
-        prev = [sx, sy];
-        if (sy >= 0 && sy <= size.h) lastGood = [sx, sy];
-      }
+      fn.segments.forEach((segment) => {
+        ctx.moveTo(segment.asx, segment.asy);
+        ctx.lineTo(segment.bsx, segment.bsy);
+      });
       ctx.stroke();
       ctx.setLineDash([]);
-      if (lastGood && fn.label && fn.showLabel !== false) labelAnchors.push({ label: fn.label, color: fn.color, sx: lastGood[0], sy: lastGood[1] });
+      if (fn.anchor && fn.label && fn.showLabel !== false) labelAnchors.push({ label: fn.label, color: fn.color, sx: fn.anchor.sx, sy: fn.anchor.sy });
     });
     implicitCurves.forEach((fn) => {
       ctx.strokeStyle = fn.color;
@@ -1714,13 +2208,12 @@ function PlotCanvas({
   }, [
     coordMode,
     curveTracker,
-    curveEntities,
     implicitCurves,
     labelFade,
     pointOverlay,
-    screenToWorld,
     selectedFunctionId,
     showCurveTrace,
+    sampledPolylineCurves,
     size,
     tangentHandles,
     tangentMode,
@@ -1758,6 +2251,7 @@ function PlotCanvas({
           x: curvePoint.x,
           y: curvePoint.y,
           seq: tangentPoints.reduce((maxSeq, tangent) => Math.max(maxSeq, tangent.seq ?? -1), -1) + 1,
+          parameterValue: curvePoint.parameterValue,
         };
         tangentDragRef.current = { id: nextTangent.id, fnId: selectedFunction.id };
         onTangentPointsChange((prev) => [...prev, nextTangent]);
@@ -1776,7 +2270,7 @@ function PlotCanvas({
       if (curvePoint) {
         onTangentPointsChange((prev) => prev.map((tangent) => (
           tangent.id === tangentDragRef.current.id
-            ? { ...tangent, x: curvePoint.x, y: curvePoint.y }
+            ? { ...tangent, x: curvePoint.x, y: curvePoint.y, parameterValue: curvePoint.parameterValue }
             : tangent
         )));
       }
@@ -1895,7 +2389,13 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly, selected, onSelect
   const hasError = !!fn.error;
   const label = fn.label || 'f';
   const curveKind = fn.curveKind || inferCurveKindFromExpr(fn.expr);
-  const descriptor = curveKind === 'implicit' ? `${label}(x, y)` : `${label}(x) =`;
+  const descriptor = curveKind === 'implicit'
+    ? `${label}(x, y)`
+    : curveKind === 'parametric'
+      ? `${label}(t) =`
+      : curveKind === 'polar'
+        ? `${label}(θ) =`
+        : `${label}(x) =`;
 
   return (
     <div
@@ -1946,7 +2446,7 @@ function FunctionRow({ fn, theme, onChange, onDelete, isOnly, selected, onSelect
               if (e.key === 'Enter') commit();
               if (e.key === 'Escape') { setDraft(fn.expr); setEditing(false); }
             }}
-            placeholder="e.g. sin(x) * x  or  x^2 + y^2 = 9"
+            placeholder="e.g. y = sin(x); x in [-pi, pi]"
             aria-label={`Expression for ${label}`}
             style={{
               width: '100%', border: 'none', outline: 'none', background: 'transparent',
@@ -2038,6 +2538,53 @@ function SidebarButton({ children, onClick, theme }) {
   );
 }
 
+function ParameterControl({ name, config, theme, onChange }) {
+  const apply = (patch) => onChange(name, patch);
+  return (
+    <div style={{ padding: '10px 16px', borderBottom: `1px solid ${theme.rule}` }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        marginBottom: 6, fontFamily: '"JetBrains Mono", monospace', fontSize: 11,
+      }}>
+        <span style={{ color: theme.ink }}>{name}</span>
+        <span style={{ color: theme.muted }}>{formatDecimalNumber(config.value)}</span>
+      </div>
+      <input
+        type="range"
+        min={config.min}
+        max={config.max}
+        step={config.step}
+        value={config.value}
+        onChange={(e) => apply({ value: parseFloat(e.target.value) })}
+        style={{ width: '100%', accentColor: theme.accent }}
+      />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, marginTop: 6 }}>
+        <input
+          type="number"
+          value={config.min}
+          step={config.step}
+          onChange={(e) => apply({ min: parseFloat(e.target.value) })}
+          style={{ width: '100%', border: `1px solid ${theme.rule}`, borderRadius: 4, padding: '5px 6px', background: theme.panel, color: theme.ink, fontFamily: '"JetBrains Mono", monospace', fontSize: 11 }}
+        />
+        <input
+          type="number"
+          value={config.value}
+          step={config.step}
+          onChange={(e) => apply({ value: parseFloat(e.target.value) })}
+          style={{ width: '100%', border: `1px solid ${theme.rule}`, borderRadius: 4, padding: '5px 6px', background: theme.panel, color: theme.ink, fontFamily: '"JetBrains Mono", monospace', fontSize: 11 }}
+        />
+        <input
+          type="number"
+          value={config.max}
+          step={config.step}
+          onChange={(e) => apply({ max: parseFloat(e.target.value) })}
+          style={{ width: '100%', border: `1px solid ${theme.rule}`, borderRadius: 4, padding: '5px 6px', background: theme.panel, color: theme.ink, fontFamily: '"JetBrains Mono", monospace', fontSize: 11 }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function ExpandedSidebarInner({
   functions,
   setFunctions,
@@ -2054,6 +2601,9 @@ function ExpandedSidebarInner({
   onFitView,
   selectedFunctionId,
   onSelectFunction,
+  parameterNames,
+  parameterConfig,
+  onParameterChange,
 }) {
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const themeMenuRef = useRef(null);
@@ -2234,6 +2784,27 @@ function ExpandedSidebarInner({
             No functions yet. Add one to get started.
           </div>
         )}
+        {parameterNames.length > 0 && (
+          <div style={{ borderTop: `1px solid ${theme.rule}`, marginTop: 8 }}>
+            <div style={{
+              padding: '12px 16px 8px 16px',
+              fontFamily: '"JetBrains Mono", monospace',
+              fontSize: 10,
+              color: theme.muted,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+            }}>Parameters</div>
+            {parameterNames.map((name) => (
+              <ParameterControl
+                key={name}
+                name={name}
+                config={sanitizeParameterConfig(parameterConfig[name], defaultParameterConfig(name))}
+                theme={theme}
+                onChange={onParameterChange}
+              />
+            ))}
+          </div>
+        )}
         <div style={{
           padding: '12px 16px 16px 16px',
           fontFamily: '"JetBrains Mono", monospace', fontSize: 10,
@@ -2244,10 +2815,13 @@ function ExpandedSidebarInner({
           <div style={{ letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Reference</div>
           <div>y = sin(x) · y = 0.5*x^2 - 2</div>
           <div>x^2 + y^2 = 9 · y^2 = 4x</div>
-          <div>x^2/9 - y^2/4 = 1</div>
+          <div>x = cos(t); y = sin(t); t in [0, 2*pi]</div>
+          <div>r = 1 + a*cos(theta); theta in [0, 2*pi]</div>
+          <div>piecewise(x &lt; 0, -1, x &gt; 1, 1, x)</div>
+          <div>y = sqrt(4 - x^2); x in [-2, 2]</div>
           <div>sin · cos · tan · asin · acos · atan</div>
           <div>exp · ln · log · sqrt · abs · pow</div>
-          <div>pi · e · tau · sec · csc · cot</div>
+          <div>pi · e · tau · sec · csc · cot · if</div>
         </div>
       </div>
 
@@ -2435,6 +3009,16 @@ function App() {
     } catch {}
     return COORD_MODES.exact;
   });
+  const [parameterConfig, setParameterConfig] = useState(() => {
+    try {
+      const stored = localStorage.getItem('locus:parameters');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch {}
+    return {};
+  });
 
   const [functions, setFunctions] = useState(() => {
     try {
@@ -2503,6 +3087,7 @@ function App() {
 
   useEffect(() => { try { localStorage.setItem('locus:theme', themeKey); } catch {} }, [themeKey]);
   useEffect(() => { try { localStorage.setItem('locus:coordMode', coordMode); } catch {} }, [coordMode]);
+  useEffect(() => { try { localStorage.setItem('locus:parameters', JSON.stringify(parameterConfig)); } catch {} }, [parameterConfig]);
   useEffect(() => { try { localStorage.setItem('locus:functions', JSON.stringify(functions)); } catch {} }, [functions]);
   useEffect(() => { try { localStorage.setItem('locus:tangentPoints', JSON.stringify(tangentPoints)); } catch {} }, [tangentPoints]);
   useEffect(() => { try { localStorage.setItem('locus:view', JSON.stringify(view)); } catch {} }, [view]);
@@ -2536,14 +3121,53 @@ function App() {
       if (!f.expr || !f.expr.trim()) return { ...f, label, curveKind: fallbackKind, compiled: null, error: null };
       try {
         const compiled = window.LocusMath.compile(f.expr);
-        if (compiled.kind === 'explicit') compiled.evaluate(0);
-        else compiled.evaluate(0, 0);
+        const params = Object.fromEntries(
+          (compiled.parameters || []).map((name) => [
+            name,
+            sanitizeParameterConfig(parameterConfig[name], defaultParameterConfig(name)).value,
+          ]),
+        );
+        if (compiled.kind === 'explicit') compiled.evaluate(0, params);
+        else if (compiled.kind === 'implicit') compiled.evaluate(0, 0, params);
+        else compiled.evaluate(compiled.parameterVar === 'theta' ? 0 : 1, params);
         return { ...f, label, curveKind: compiled.kind, compiled, error: null };
       } catch (err) {
         return { ...f, label, curveKind: fallbackKind, compiled: null, error: humanizeError(err.message) };
       }
     });
-  }, [functions]);
+  }, [functions, parameterConfig]);
+
+  const parameterNames = useMemo(() => {
+    const names = new Set();
+    compiledFunctions.forEach((fn) => {
+      (fn.compiled?.parameters || []).forEach((name) => names.add(name));
+    });
+    return [...names].sort();
+  }, [compiledFunctions]);
+
+  useEffect(() => {
+    setParameterConfig((prev) => {
+      const next = {};
+      parameterNames.forEach((name) => {
+        next[name] = sanitizeParameterConfig(prev[name], defaultParameterConfig(name));
+      });
+      const prevKeys = Object.keys(prev);
+      if (
+        prevKeys.length === parameterNames.length &&
+        prevKeys.every((key) => next[key] && JSON.stringify(next[key]) === JSON.stringify(prev[key]))
+      ) return prev;
+      return next;
+    });
+  }, [parameterNames]);
+
+  const parameterValues = useMemo(() => (
+    Object.fromEntries(
+      parameterNames.map((name) => [
+        name,
+        sanitizeParameterConfig(parameterConfig[name], defaultParameterConfig(name)).value,
+      ]),
+    )
+  ), [parameterConfig, parameterNames]);
 
   useEffect(() => {
     if (compiledFunctions.some((fn) => fn.id === selectedFunctionId)) return;
@@ -2556,10 +3180,21 @@ function App() {
         .map((tangent) => {
           const fn = compiledFunctions.find((item) => item.id === tangent.fnId);
           if (!fn || !fn.compiled) return null;
-          if (fn.compiled.kind !== 'explicit') return tangent;
-          const y = evaluateExplicitSafe(fn.compiled, tangent.x);
-          if (!Number.isFinite(y)) return null;
-          return Math.abs(y - tangent.y) > 1e-6 ? { ...tangent, y } : tangent;
+          if (fn.compiled.kind === 'explicit') {
+            const y = evaluateExplicitSafe(fn.compiled, tangent.x, parameterValues);
+            if (!Number.isFinite(y)) return null;
+            return Math.abs(y - tangent.y) > 1e-6 ? { ...tangent, y } : tangent;
+          }
+          if (fn.compiled.kind === 'parametric' || fn.compiled.kind === 'polar') {
+            if (!Number.isFinite(tangent.parameterValue)) return tangent;
+            const point = evaluateCurvePointSafe(fn.compiled, tangent.parameterValue, parameterValues);
+            if (!point) return null;
+            return (
+              Math.abs(point.x - tangent.x) > 1e-6 ||
+              Math.abs(point.y - tangent.y) > 1e-6
+            ) ? { ...tangent, x: point.x, y: point.y } : tangent;
+          }
+          return tangent;
         })
         .filter(Boolean);
       if (next.length !== prev.length) return next;
@@ -2568,7 +3203,7 @@ function App() {
       }
       return prev;
     });
-  }, [compiledFunctions]);
+  }, [compiledFunctions, parameterValues]);
 
   const prevThemeRef = useRef(themeKey);
   useEffect(() => {
@@ -2640,6 +3275,14 @@ function App() {
     setFunctions(prev => prev.map(f => f.id === id ? { ...f, visible: !f.visible } : f));
   }, []);
 
+  const onParameterChange = useCallback((name, patch) => {
+    setParameterConfig((prev) => {
+      const current = sanitizeParameterConfig(prev[name], defaultParameterConfig(name));
+      const next = sanitizeParameterConfig({ ...current, ...patch }, defaultParameterConfig(name));
+      return { ...prev, [name]: next };
+    });
+  }, []);
+
   const fitView = useCallback(() => {
     const visibleFns = compiledFunctions.filter(f => f.visible && f.compiled);
     if (!visibleFns.length) { setView({ cx: 0, cy: 0, scale: 50 }); return; }
@@ -2649,9 +3292,10 @@ function App() {
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
     visibleFns.forEach(fn => {
       if (fn.compiled.kind === 'explicit') {
+        const range = getCurveAxisRange(fn.compiled, 'x', bounds.wxMin, bounds.wxMax, parameterValues);
         for (let i = 0; i <= 600; i++) {
-          const x = bounds.wxMin + (bounds.wxMax - bounds.wxMin) * (i / 600);
-          const y = evaluateExplicitSafe(fn.compiled, x);
+          const x = range.min + (range.max - range.min) * (i / 600);
+          const y = evaluateExplicitSafe(fn.compiled, x, parameterValues);
           if (!Number.isFinite(y) || Math.abs(y) > 1e8) continue;
           if (x < xMin) xMin = x;
           if (x > xMax) xMax = x;
@@ -2660,7 +3304,17 @@ function App() {
         }
         return;
       }
-      const segments = sampleImplicitSegments(fn.compiled, bounds, 140, 140);
+      if (fn.compiled.kind === 'parametric' || fn.compiled.kind === 'polar') {
+        samplePolylineWorldPoints(fn, bounds, 900, parameterValues).forEach((point) => {
+          if (!point) return;
+          xMin = Math.min(xMin, point.x);
+          xMax = Math.max(xMax, point.x);
+          yMin = Math.min(yMin, point.y);
+          yMax = Math.max(yMax, point.y);
+        });
+        return;
+      }
+      const segments = sampleImplicitSegments(fn.compiled, bounds, 140, 140, parameterValues);
       segments.forEach((segment) => {
         xMin = Math.min(xMin, segment.ax, segment.bx);
         xMax = Math.max(xMax, segment.ax, segment.bx);
@@ -2681,7 +3335,7 @@ function App() {
     const yRange = (yMax - yMin) * pad;
     const scale = Math.max(1, Math.min(4000, Math.min(canvasW / xRange, canvasH / yRange)));
     setView({ cx, cy, scale });
-  }, [compiledFunctions, collapsed, sidebarWidth]);
+  }, [compiledFunctions, collapsed, parameterValues, sidebarWidth]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -2728,6 +3382,9 @@ function App() {
         onToggleVisibility={toggleVisibility}
         selectedFunctionId={selectedFunctionId}
         onSelectFunction={setSelectedFunctionId}
+        parameterNames={parameterNames}
+        parameterConfig={parameterConfig}
+        onParameterChange={onParameterChange}
         collapsed={collapsed}
         expandedWidth={sidebarWidth}
         onCollapse={() => setCollapsed(true)}
@@ -2747,6 +3404,7 @@ function App() {
           tangentMode={tangentMode}
           tangentPoints={tangentPoints}
           onTangentPointsChange={setTangentPoints}
+          parameters={parameterValues}
         />
         <div style={{ position: 'absolute', top: 16, right: 16, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           <div className="coord-mode-switch" style={{ color: theme.muted, background: theme.panel, borderColor: theme.rule }}>
