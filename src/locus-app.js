@@ -346,7 +346,7 @@
         resetView();
         return;
       }
-      const canvasW = Math.max(360, window.innerWidth - (collapsed ? RAIL_WIDTH : sidebarWidth));
+      const canvasW = Math.max(360, window.innerWidth);
       const canvasH = Math.max(300, window.innerHeight);
       const bounds = { wxMin: -10, wxMax: 10, wyMin: -10, wyMax: 10 };
       let xMin = Infinity;
@@ -404,7 +404,7 @@
       const scaleX = Math.max(1, Math.min(MAX_VIEW_SCALE, canvasW / xRange));
       const scaleY = Math.max(1, Math.min(MAX_VIEW_SCALE, canvasH / yRange));
       setView({ cx, cy, scaleX, scaleY });
-    }, [compiledFunctions, collapsed, parameterValues, resetView, sidebarWidth]);
+    }, [compiledFunctions, parameterValues, resetView]);
     useEffect(() => {
       const onKey = (e) => {
         const tag = e.target && e.target.tagName;
@@ -431,123 +431,150 @@
       return () => window.removeEventListener("keydown", onKey);
     }, [fitView, resetView, scaleView]);
     const selectedTangentCount = tangentPoints.filter((tangent) => tangent.fnId === selectedFunctionId).length;
-    return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", width: "100%", height: "100%", background: theme.bg } }, /* @__PURE__ */ React.createElement(
-      SidebarShell,
-      {
-        functions: compiledFunctions,
-        setFunctions: setFunctionsFromSidebar,
-        theme,
-        themeKey,
-        pickTheme,
-        view,
-        setView,
-        traceInfo,
-        coordMode,
-        onExport: exportPNG,
-        onFitView: fitView,
-        onToggleVisibility: toggleVisibility,
-        selectedFunctionId,
-        onSelectFunction: setSelectedFunctionId,
-        parameterNames,
-        parameterConfig,
-        onParameterChange,
-        onApplyExample: applyExample,
-        collapsed,
-        expandedWidth: sidebarWidth,
-        onCollapse: () => setCollapsed(true),
-        onExpand: () => setCollapsed(false),
-        onResizeStart,
-        resizing
-      }
-    ), /* @__PURE__ */ React.createElement("main", { style: { flex: 1, position: "relative", background: theme.bg, minWidth: 0 } }, /* @__PURE__ */ React.createElement(
-      PlotCanvas,
-      {
-        functions: compiledFunctions,
-        view,
-        setView,
-        theme,
-        onTrace: setTraceInfo,
-        coordMode,
-        selectedFunctionId,
-        tangentMode,
-        tangentPoints,
-        onTangentPointsChange: setTangentPoints,
-        parameters: parameterValues
-      }
-    ), /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", top: 16, right: 16, display: "flex", gap: 8, alignItems: "flex-start" } }, /* @__PURE__ */ React.createElement("div", { className: "coord-mode-switch", style: { color: theme.muted, background: theme.panel, borderColor: theme.rule } }, /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        className: coordMode === COORD_MODES.exact ? "active" : "",
-        onClick: () => setCoordMode(COORD_MODES.exact),
-        title: "\u5C3D\u91CF\u7528\u7CBE\u786E\u5F62\u5F0F\u663E\u793A\u5750\u6807",
-        "aria-label": "\u7CBE\u786E\u5750\u6807",
-        style: { color: coordMode === COORD_MODES.exact ? theme.ink : theme.muted, background: coordMode === COORD_MODES.exact ? theme.chip : "transparent" }
-      },
-      "\u7CBE\u786E"
-    ), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        className: coordMode === COORD_MODES.decimal ? "active" : "",
-        onClick: () => setCoordMode(COORD_MODES.decimal),
-        title: "\u7528\u5C0F\u6570\u5F62\u5F0F\u663E\u793A\u5750\u6807",
-        "aria-label": "\u5C0F\u6570\u5750\u6807",
-        style: { color: coordMode === COORD_MODES.decimal ? theme.ink : theme.muted, background: coordMode === COORD_MODES.decimal ? theme.chip : "transparent" }
-      },
-      "\u5C0F\u6570"
-    )), /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => setTangentMode((value) => !value),
-        title: tangentMode ? "\u9000\u51FA\u5207\u7EBF\u6A21\u5F0F" : "\u8FDB\u5165\u5207\u7EBF\u6A21\u5F0F",
-        style: {
-          border: `1px solid ${theme.rule}`,
-          background: tangentMode ? theme.chip : theme.panel,
-          borderRadius: 6,
-          color: tangentMode ? theme.ink : theme.muted,
-          padding: "7px 10px",
-          fontFamily: '"JetBrains Mono", monospace',
-          fontSize: 10,
-          letterSpacing: "0.08em",
-          textTransform: "uppercase",
-          cursor: "pointer"
+    return /* @__PURE__ */ React.createElement(
+      "div",
+      { style: { position: "relative", width: "100%", height: "100%", background: theme.bg, overflow: "hidden" } },
+      /* @__PURE__ */ React.createElement(
+        "main",
+        { style: { position: "absolute", inset: 0, background: theme.bg, minWidth: 0 } },
+        /* @__PURE__ */ React.createElement(
+          PlotCanvas,
+          {
+            functions: compiledFunctions,
+            view,
+            setView,
+            theme,
+            onTrace: setTraceInfo,
+            coordMode,
+            selectedFunctionId,
+            tangentMode,
+            tangentPoints,
+            onTangentPointsChange: setTangentPoints,
+            parameters: parameterValues
+          }
+        ),
+        /* @__PURE__ */ React.createElement(
+          "div",
+          { style: { position: "absolute", top: 16, right: 16, display: "flex", gap: 8, alignItems: "flex-start" } },
+          /* @__PURE__ */ React.createElement("div", { className: "coord-mode-switch", style: { color: theme.muted, background: theme.panel, borderColor: theme.rule } }, /* @__PURE__ */ React.createElement(
+            "button",
+            {
+              className: coordMode === COORD_MODES.exact ? "active" : "",
+              onClick: () => setCoordMode(COORD_MODES.exact),
+              title: "\u5C3D\u91CF\u7528\u7CBE\u786E\u5F62\u5F0F\u663E\u793A\u5750\u6807",
+              "aria-label": "\u7CBE\u786E\u5750\u6807",
+              style: { color: coordMode === COORD_MODES.exact ? theme.ink : theme.muted, background: coordMode === COORD_MODES.exact ? theme.chip : "transparent" }
+            },
+            "\u7CBE\u786E"
+          ), /* @__PURE__ */ React.createElement(
+            "button",
+            {
+              className: coordMode === COORD_MODES.decimal ? "active" : "",
+              onClick: () => setCoordMode(COORD_MODES.decimal),
+              title: "\u7528\u5C0F\u6570\u5F62\u5F0F\u663E\u793A\u5750\u6807",
+              "aria-label": "\u5C0F\u6570\u5750\u6807",
+              style: { color: coordMode === COORD_MODES.decimal ? theme.ink : theme.muted, background: coordMode === COORD_MODES.decimal ? theme.chip : "transparent" }
+            },
+            "\u5C0F\u6570"
+          )),
+          /* @__PURE__ */ React.createElement(
+            "button",
+            {
+              onClick: () => setTangentMode((value) => !value),
+              title: tangentMode ? "\u9000\u51FA\u5207\u7EBF\u6A21\u5F0F" : "\u8FDB\u5165\u5207\u7EBF\u6A21\u5F0F",
+              style: {
+                border: `1px solid ${theme.rule}`,
+                background: tangentMode ? theme.chip : theme.panel,
+                borderRadius: 6,
+                color: tangentMode ? theme.ink : theme.muted,
+                padding: "7px 10px",
+                fontFamily: '"JetBrains Mono", monospace',
+                fontSize: 10,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                cursor: "pointer"
+              }
+            },
+            tangentMode ? `\u5207\u7EBF \xB7 ${selectedTangentCount}` : "\u5207\u7EBF"
+          )
+        ),
+        showTweaks && /* @__PURE__ */ React.createElement(
+          React.Fragment,
+          null,
+          /* @__PURE__ */ React.createElement(
+            "button",
+            {
+              onClick: () => setTweaksOpen((open) => !open),
+              style: {
+                position: "absolute",
+                top: 16,
+                left: 16,
+                width: 34,
+                height: 34,
+                borderRadius: 17,
+                border: `1px solid ${theme.rule}`,
+                background: theme.panel,
+                color: theme.ink,
+                cursor: "pointer",
+                fontFamily: '"JetBrains Mono", monospace',
+                fontSize: 12
+              },
+              "aria-label": "\u5207\u6362\u4E3B\u9898\u8C03\u8282\u9762\u677F"
+            },
+            "\u2726"
+          ),
+          tweaksOpen && /* @__PURE__ */ React.createElement(
+            "div",
+            { ref: tweaksRef, className: "tweaks-panel" },
+            /* @__PURE__ */ React.createElement("h3", null, "\u4E3B\u9898"),
+            /* @__PURE__ */ React.createElement("div", { className: "theme-grid" }, Object.entries(window.LOCUS_THEMES).map(([key, t]) => /* @__PURE__ */ React.createElement(
+              "button",
+              {
+                key,
+                className: "theme-swatch",
+                onClick: () => pickTheme(key),
+                style: {
+                  background: t.bg,
+                  borderColor: key === themeKey ? theme.ink : "transparent"
+                },
+                "aria-label": `\u4F7F\u7528 ${t.name}`
+              },
+              /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: 5, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2 } }, t.funcPalette.slice(0, 3).map((color, idx) => /* @__PURE__ */ React.createElement("div", { key: idx, style: { background: color, borderRadius: 2 } })))
+            ))),
+            /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 } }, Object.entries(window.LOCUS_THEMES).map(([key, t]) => /* @__PURE__ */ React.createElement("div", { key, className: "theme-swatch-label" }, t.name)))
+          )
+        )
+      ),
+      /* @__PURE__ */ React.createElement(
+        SidebarShell,
+        {
+          functions: compiledFunctions,
+          setFunctions: setFunctionsFromSidebar,
+          theme,
+          themeKey,
+          pickTheme,
+          view,
+          setView,
+          traceInfo,
+          coordMode,
+          onExport: exportPNG,
+          onFitView: fitView,
+          onToggleVisibility: toggleVisibility,
+          selectedFunctionId,
+          onSelectFunction: setSelectedFunctionId,
+          parameterNames,
+          parameterConfig,
+          onParameterChange,
+          onApplyExample: applyExample,
+          collapsed,
+          expandedWidth: sidebarWidth,
+          onCollapse: () => setCollapsed(true),
+          onExpand: () => setCollapsed(false),
+          onResizeStart,
+          resizing
         }
-      },
-      tangentMode ? `\u5207\u7EBF \xB7 ${selectedTangentCount}` : "\u5207\u7EBF"
-    )), showTweaks && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        onClick: () => setTweaksOpen((open) => !open),
-        style: {
-          position: "absolute",
-          top: 16,
-          left: 16,
-          width: 34,
-          height: 34,
-          borderRadius: 17,
-          border: `1px solid ${theme.rule}`,
-          background: theme.panel,
-          color: theme.ink,
-          cursor: "pointer",
-          fontFamily: '"JetBrains Mono", monospace',
-          fontSize: 12
-        },
-        "aria-label": "\u5207\u6362\u4E3B\u9898\u8C03\u8282\u9762\u677F"
-      },
-      "\u2726"
-    ), tweaksOpen && /* @__PURE__ */ React.createElement("div", { ref: tweaksRef, className: "tweaks-panel" }, /* @__PURE__ */ React.createElement("h3", null, "\u4E3B\u9898"), /* @__PURE__ */ React.createElement("div", { className: "theme-grid" }, Object.entries(window.LOCUS_THEMES).map(([key, t]) => /* @__PURE__ */ React.createElement(
-      "button",
-      {
-        key,
-        className: "theme-swatch",
-        onClick: () => pickTheme(key),
-        style: {
-          background: t.bg,
-          borderColor: key === themeKey ? theme.ink : "transparent"
-        },
-        "aria-label": `\u4F7F\u7528 ${t.name}`
-      },
-      /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: 5, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2 } }, t.funcPalette.slice(0, 3).map((color, idx) => /* @__PURE__ */ React.createElement("div", { key: idx, style: { background: color, borderRadius: 2 } })))
-    ))), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 } }, Object.entries(window.LOCUS_THEMES).map(([key, t]) => /* @__PURE__ */ React.createElement("div", { key, className: "theme-swatch-label" }, t.name)))))));
+      )
+    );
   }
   ReactDOM.createRoot(document.getElementById("root")).render(/* @__PURE__ */ React.createElement(App, null));
 })();

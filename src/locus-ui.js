@@ -1022,6 +1022,7 @@
     return /* @__PURE__ */ React.createElement(
       "div",
       {
+        className: `function-row-surface${selected ? " selected" : ""}`,
         onClick: onSelect,
         style: {
           display: "flex",
@@ -1215,7 +1216,7 @@
       fontSize: 13,
       fontWeight: 600,
       color: theme.ink
-    } }, "\u793A\u4F8B\u4E0E\u8BED\u6CD5"))), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, overflowY: "auto", padding: "14px 16px 18px 16px" } }, /* @__PURE__ */ React.createElement("div", { style: {
+    } }, "\u793A\u4F8B\u4E0E\u8BED\u6CD5"))), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, overflowY: "auto", padding: "14px 16px 18px 16px" } }, /* @__PURE__ */ React.createElement("div", { className: "sidebar-card-surface", style: {
       padding: "12px 14px",
       borderRadius: 18,
       background: theme.chip,
@@ -1229,7 +1230,7 @@
       "section",
       {
         key: section.title,
-        className: "examples-card",
+        className: "examples-card sidebar-card-surface",
         style: {
           borderRadius: 20,
           padding: "14px 14px 12px 14px",
@@ -1255,7 +1256,7 @@
         "button",
         {
           key: `${section.title}:${item.label}`,
-          className: "example-item",
+          className: "example-item sidebar-card-surface",
           onClick: () => onApplyExample(item.expr),
           title: `\u63D2\u5165 ${item.label}`,
           style: {
@@ -1402,10 +1403,10 @@
         window.removeEventListener("keydown", onKeyDown);
       };
     }, [themeMenuOpen]);
-    return /* @__PURE__ */ React.createElement("div", { style: {
+    return /* @__PURE__ */ React.createElement("div", { className: "sidebar-surface", style: {
       width,
       height: "100%",
-      background: theme.panel,
+      background: "transparent",
       display: "flex",
       flexDirection: "column"
     } }, /* @__PURE__ */ React.createElement("div", { style: {
@@ -1450,7 +1451,7 @@
       },
       /* @__PURE__ */ React.createElement("span", { style: { width: 8, height: 8, borderRadius: 8, background: theme.accent } }),
       window.LOCUS_THEMES[themeKey].name
-    ), themeMenuOpen && /* @__PURE__ */ React.createElement("div", { className: "popover-grow", style: {
+    ), themeMenuOpen && /* @__PURE__ */ React.createElement("div", { className: "popover-grow sidebar-popover-surface", style: {
       position: "absolute",
       top: "calc(100% + 8px)",
       right: 0,
@@ -1589,7 +1590,7 @@
     } }, /* @__PURE__ */ React.createElement(
       "button",
       {
-        className: "examples-entry",
+        className: "examples-entry sidebar-card-surface",
         onClick: () => setPanelPage("examples"),
         title: "\u6253\u5F00\u793A\u4F8B\u9875",
         style: {
@@ -1645,7 +1646,7 @@
         onBack: () => setPanelPage("functions"),
         onApplyExample
       }
-    ), /* @__PURE__ */ React.createElement("div", { style: { borderTop: `1px solid ${theme.rule}` } }, /* @__PURE__ */ React.createElement("div", { style: {
+    ), /* @__PURE__ */ React.createElement("div", { className: "sidebar-footer-surface", style: { borderTop: `1px solid ${theme.rule}` } }, /* @__PURE__ */ React.createElement("div", { style: {
       padding: "10px 16px",
       borderBottom: `1px solid ${theme.rule}`,
       fontFamily: '"JetBrains Mono", monospace',
@@ -1662,10 +1663,10 @@
     } }, "X \u7F29\u653E ", formatDecimalNumber(view.scaleX), " \xB7 Y \u7F29\u653E ", formatDecimalNumber(view.scaleY)), /* @__PURE__ */ React.createElement("div", { style: { padding: "10px 16px 12px 16px", display: "flex", gap: 6, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1.4, 1.4) }, "\u653E\u5927"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1 / 1.4, 1 / 1.4) }, "\u7F29\u5C0F"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1.4, 1), title: "\u4EC5\u62C9\u4F38 X \u8F74" }, "X \u62C9\u4F38"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1 / 1.4, 1), title: "\u4EC5\u538B\u7F29 X \u8F74" }, "X \u538B\u7F29"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1, 1.4), title: "\u4EC5\u62C9\u4F38 Y \u8F74" }, "Y \u62C9\u4F38"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: () => scaleView(1, 1 / 1.4), title: "\u4EC5\u538B\u7F29 Y \u8F74" }, "Y \u538B\u7F29"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: onFitView }, "\u9002\u914D\u6570\u636E"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: resetView }, "\u91CD\u7F6E"), /* @__PURE__ */ React.createElement(SidebarButton, { theme, onClick: onExport }, "\u5BFC\u51FA PNG"))));
   }
   function CollapsedRailInner({ functions, theme, onExpand, onToggleVisibility }) {
-    return /* @__PURE__ */ React.createElement("div", { style: {
+    return /* @__PURE__ */ React.createElement("div", { className: "sidebar-rail-surface", style: {
       width: RAIL_WIDTH,
       height: "100%",
-      background: theme.panel,
+      background: "transparent",
       display: "flex",
       flexDirection: "column",
       alignItems: "center",
@@ -1739,18 +1740,28 @@
     } }, "Locus"));
   }
   function SidebarShell(props) {
-    const { collapsed, expandedWidth, theme, onResizeStart, resizing } = props;
+    const { collapsed, expandedWidth, theme, themeKey, onResizeStart, resizing } = props;
     const currentWidth = collapsed ? RAIL_WIDTH : expandedWidth;
     const expandedSnapshotRef = useRef(expandedWidth);
     if (!collapsed) expandedSnapshotRef.current = expandedWidth;
     return /* @__PURE__ */ React.createElement(
       "div",
       {
-        className: `sidebar-shell ${resizing ? "no-anim" : ""}`,
+        className: `sidebar-shell theme-${themeKey || "default"} ${resizing ? "no-anim" : ""}`,
         style: {
+          "--sidebar-panel": theme.panel,
+          "--sidebar-chip": theme.chip,
+          "--sidebar-rule": theme.rule,
+          "--sidebar-rule-strong": theme.ruleStrong,
+          "--sidebar-shadow": theme.shadow || "rgba(22, 28, 45, 0.18)",
           width: currentWidth,
-          borderRight: `1px solid ${theme.rule}`,
-          background: theme.panel
+          borderRight: "none",
+          background: "transparent",
+          position: "absolute",
+          top: 0,
+          left: 0,
+          bottom: 0,
+          zIndex: 4
         }
       },
       /* @__PURE__ */ React.createElement(

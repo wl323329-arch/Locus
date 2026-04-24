@@ -629,4 +629,16 @@ window.LOCUS_THEMES = {
     axis: 'rgba(72, 35, 23, 0.78)', accent: '#ea7044', chip: 'rgba(255, 249, 245, 0.58)',
     funcPalette: ['oklch(65% 0.20 30)', 'oklch(65% 0.18 140)', 'oklch(65% 0.18 260)', 'oklch(65% 0.20 340)', 'oklch(70% 0.17 90)', 'oklch(65% 0.18 200)'],
   },
+  noir: {
+    name: '玄夜', bg: '#000000', panel: 'rgba(28, 28, 30, 0.72)', ink: '#f5f5f7', muted: 'rgba(235, 235, 245, 0.6)',
+    rule: 'rgba(84, 84, 88, 0.65)', ruleStrong: 'rgba(152, 152, 157, 0.55)', gridMinor: 'rgba(152, 152, 157, 0.08)', gridMajor: 'rgba(199, 199, 204, 0.18)',
+    axis: 'rgba(242, 242, 247, 0.78)', accent: '#0a84ff', chip: 'rgba(72, 72, 74, 0.6)',
+    funcPalette: ['#ff453a', '#30d158', '#0a84ff', '#ff9f0a', '#bf5af2', '#64d2ff'],
+  },
+  frost: {
+    name: '素白', bg: '#ffffff', panel: 'rgba(242, 242, 247, 0.8)', ink: '#1d1d1f', muted: 'rgba(60, 60, 67, 0.6)',
+    rule: 'rgba(60, 60, 67, 0.18)', ruleStrong: 'rgba(60, 60, 67, 0.36)', gridMinor: 'rgba(60, 60, 67, 0.08)', gridMajor: 'rgba(60, 60, 67, 0.16)',
+    axis: 'rgba(29, 29, 31, 0.78)', accent: '#007aff', chip: 'rgba(242, 242, 247, 0.9)',
+    funcPalette: ['#ff3b30', '#34c759', '#007aff', '#ff9500', '#af52de', '#5ac8fa'],
+  },
 };
