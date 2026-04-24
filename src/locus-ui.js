@@ -131,7 +131,7 @@
     return { draggingRef, pinchRef, zoomAroundPoint };
   }
 
-  function useTangentDrag({ selectedFunction, tangentMode, tangentHandles, tangentPoints, findPointOnFunction, onTangentPointsChange }) {
+  function useTangentDrag({ selectedFunction, tangentMode, tangentHandles, tangentPoints, findPointOnFunction, onTangentPointsChange, onSelectTangent }) {
     const tangentDragRef = useRef(null);
     const tryStart = (localPoint) => {
       if (!tangentMode || !selectedFunction) return false;
@@ -143,6 +143,7 @@
         }, null);
       if (handle && handle.dist <= 14) {
         tangentDragRef.current = { id: handle.item.id, fnId: selectedFunction.id };
+        onSelectTangent(handle.item.id);
         return true;
       }
       const curvePoint = findPointOnFunction(localPoint, selectedFunction.id);
@@ -157,6 +158,7 @@
         parameterValue: curvePoint.parameterValue
       };
       tangentDragRef.current = { id: nextTangent.id, fnId: selectedFunction.id };
+      onSelectTangent(nextTangent.id);
       onTangentPointsChange((prev) => [...prev, nextTangent]);
       return true;
     };
@@ -189,6 +191,7 @@
     onTangentPointsChange,
     parameters
   }) {
+    const [selectedTangentId, setSelectedTangentId] = useState(null);
     const baseCanvasRef = useRef(null);
     const overlayCanvasRef = useRef(null);
     const wrapRef = useRef(null);
@@ -268,6 +271,7 @@
           ownerId: owner.id,
           tangentId: tangent.id,
           tangentPoint: tangent,
+          line: tangentLine,
           compiled: {
             kind: "implicit",
             evaluate: (x) => x - tangentLine.x
@@ -286,6 +290,7 @@
         ownerId: owner.id,
         tangentId: tangent.id,
         tangentPoint: tangent,
+        line: tangentLine,
         compiled: {
           kind: "explicit",
           evaluate: (x) => tangentLine.y + tangentLine.slope * (x - tangentLine.x)
@@ -423,6 +428,23 @@
       const [sx, sy] = worldToScreen(tangent.x, tangent.y);
       return { ...tangent, color: owner.color, ownerLabel: owner.label, sx, sy };
     }).filter((handle) => handle && handle.sx >= -20 && handle.sx <= size.w + 20 && handle.sy >= -20 && handle.sy <= size.h + 20), [functions, size.h, size.w, tangentPoints, worldToScreen]);
+    useEffect(() => {
+      if (!selectedTangentId || tangentPoints.some((point) => point.id === selectedTangentId)) return;
+      setSelectedTangentId(null);
+    }, [selectedTangentId, tangentPoints]);
+    useEffect(() => {
+      if (!tangentMode || !selectedTangentId) return;
+      const onKeyDown = (e) => {
+        const tag = e.target && e.target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || e.target?.isContentEditable) return;
+        if (e.key !== "Delete" && e.key !== "Backspace") return;
+        e.preventDefault();
+        onTangentPointsChange((prev) => prev.filter((point) => point.id !== selectedTangentId));
+        setSelectedTangentId(null);
+      };
+      window.addEventListener("keydown", onKeyDown);
+      return () => window.removeEventListener("keydown", onKeyDown);
+    }, [onTangentPointsChange, selectedTangentId, tangentMode]);
     const curveTracker = useMemo(() => {
       const mouse = mouseRef.current;
       if (!mouse) return null;
@@ -687,12 +709,13 @@
       });
       tangentHandles.forEach((handle) => {
         const isSelectedOwner = handle.fnId === selectedFunctionId;
+        const isSelectedHandle = handle.id === selectedTangentId;
         ctx.save();
         ctx.fillStyle = theme.panel;
         ctx.strokeStyle = handle.color;
-        ctx.lineWidth = tangentMode && isSelectedOwner ? 2.5 : 2;
+        ctx.lineWidth = isSelectedHandle ? 3 : tangentMode && isSelectedOwner ? 2.5 : 2;
         ctx.beginPath();
-        ctx.arc(handle.sx, handle.sy, tangentMode && isSelectedOwner ? 6 : 5, 0, Math.PI * 2);
+        ctx.arc(handle.sx, handle.sy, isSelectedHandle ? 7 : tangentMode && isSelectedOwner ? 6 : 5, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
         ctx.fillStyle = handle.color;
@@ -733,6 +756,7 @@
       sampledPolylineCurves,
       screenPoints,
       selectedFunctionId,
+      selectedTangentId,
       size.h,
       size.w,
       tangentHandles,
@@ -862,7 +886,8 @@
       tangentHandles,
       tangentPoints,
       findPointOnFunction,
-      onTangentPointsChange
+      onTangentPointsChange,
+      onSelectTangent: setSelectedTangentId
     });
     const onMouseDown = (e) => {
       const rect = overlayCanvasRef.current.getBoundingClientRect();
@@ -1154,6 +1179,20 @@
       )
     );
   }
+  function TangentList({ tangents, owner, theme, coordMode, onDelete }) {
+    if (!owner || !tangents.length) return null;
+    const rows = tangents.map((tangent) => /* @__PURE__ */ React.createElement("div", {
+      key: tangent.id,
+      className: "sidebar-card-surface",
+      style: { margin: "0 16px 8px 16px", padding: "8px 8px 8px 10px", border: `1px solid ${theme.rule}`, borderRadius: 6, background: theme.chip, display: "flex", alignItems: "center", gap: 8 }
+    }, /* @__PURE__ */ React.createElement("span", { style: { width: 8, height: 8, borderRadius: 8, background: owner.color, flexShrink: 0 } }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: '"JetBrains Mono", monospace', fontSize: 11, color: theme.ink } }, formatTangentLabel(tangent.seq, owner.label)), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 2, fontFamily: '"JetBrains Mono", monospace', fontSize: 10, color: theme.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, formatPointLabel(tangent.x, tangent.y, coordMode))), /* @__PURE__ */ React.createElement("button", {
+      onClick: () => onDelete(tangent.id),
+      title: "\u5220\u9664\u5207\u7EBF",
+      "aria-label": `\u5220\u9664 ${formatTangentLabel(tangent.seq, owner.label)}`,
+      style: { width: 28, height: 28, border: "none", background: "transparent", color: theme.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }
+    }, /* @__PURE__ */ React.createElement(TrashIcon, null))));
+    return /* @__PURE__ */ React.createElement("div", { style: { borderTop: `1px solid ${theme.rule}`, marginTop: 8 } }, /* @__PURE__ */ React.createElement("div", { style: { padding: "12px 16px 8px 16px", fontFamily: '"JetBrains Mono", monospace', fontSize: 10, color: theme.muted, letterSpacing: "0.08em" } }, "\u5207\u7EBF \xB7 ", tangents.length), rows);
+  }
   function SidebarButton({ children, onClick, theme, ...buttonProps }) {
     const [hover, setHover] = useState(false);
     return /* @__PURE__ */ React.createElement(
@@ -1352,6 +1391,8 @@
     onFitView,
     selectedFunctionId,
     onSelectFunction,
+    tangentPoints = [],
+    onTangentPointsChange,
     parameterNames,
     parameterConfig,
     onParameterChange,
@@ -1379,7 +1420,14 @@
       copy[idx] = next;
       setFunctions(copy);
     };
-    const deleteFn = (idx) => setFunctions(functions.filter((_, i) => i !== idx));
+    const deleteFn = (idx) => {
+      const deletedId = functions[idx]?.id;
+      setFunctions(functions.filter((_, i) => i !== idx));
+      if (deletedId && onTangentPointsChange) onTangentPointsChange((prev) => prev.filter((point) => point.fnId !== deletedId));
+    };
+    const selectedFunction = functions.find((fn) => fn.id === selectedFunctionId);
+    const selectedTangents = selectedFunction ? tangentPoints.filter((point) => point.fnId === selectedFunction.id) : [];
+    const deleteTangent = (id) => onTangentPointsChange?.((prev) => prev.filter((point) => point.id !== id));
     const scaleView = (factorX, factorY) => {
       setView((current) => sanitizeView({
         ...current,
@@ -1568,7 +1616,13 @@
         selected: fn.id === selectedFunctionId,
         onSelect: () => onSelectFunction(fn.id)
       }
-    )), functions.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", color: theme.muted, fontSize: 12 } }, "\u8FD8\u6CA1\u6709\u51FD\u6570\uFF0C\u5148\u65B0\u589E\u4E00\u6761\u5F00\u59CB\u3002"), parameterNames.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { borderTop: `1px solid ${theme.rule}`, marginTop: 8 } }, /* @__PURE__ */ React.createElement("div", { style: {
+    )), functions.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", color: theme.muted, fontSize: 12 } }, "\u8FD8\u6CA1\u6709\u51FD\u6570\uFF0C\u5148\u65B0\u589E\u4E00\u6761\u5F00\u59CB\u3002"), /* @__PURE__ */ React.createElement(TangentList, {
+      tangents: selectedTangents,
+      owner: selectedFunction,
+      theme,
+      coordMode,
+      onDelete: deleteTangent
+    }), parameterNames.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { borderTop: `1px solid ${theme.rule}`, marginTop: 8 } }, /* @__PURE__ */ React.createElement("div", { style: {
       padding: "12px 16px 8px 16px",
       fontFamily: '"JetBrains Mono", monospace',
       fontSize: 10,

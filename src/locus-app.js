@@ -562,6 +562,8 @@
           onToggleVisibility: toggleVisibility,
           selectedFunctionId,
           onSelectFunction: setSelectedFunctionId,
+          tangentPoints,
+          onTangentPointsChange: setTangentPoints,
           parameterNames,
           parameterConfig,
           onParameterChange,

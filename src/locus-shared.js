@@ -318,6 +318,15 @@
     return deduped;
   }
 
+  function isTangentCurve(curve) {
+    return curve?.source === 'tangent' && curve.line && curve.tangentPoint;
+  }
+
+  function tangentLineY(line, x) {
+    if (!line || line.type === 'vertical') return NaN;
+    return line.y + line.slope * (x - line.x);
+  }
+
   function getImplicitSampleGrid(width, height) {
     return {
       cols: Math.max(48, Math.min(220, Math.ceil(width / 8))),
@@ -327,6 +336,7 @@
 
   function samplePolylineWorldPoints(fn, bounds, sampleCount, params = {}) {
     if (!fn?.compiled) return [];
+    if (isTangentCurve(fn)) return sampleTangentLineWorldPoints(fn.line, bounds);
     const compiled = fn.compiled;
     const points = [];
     if (compiled.kind === 'explicit') {
@@ -352,9 +362,26 @@
     return points;
   }
 
+  function sampleTangentLineWorldPoints(line, bounds) {
+    const { wxMin, wxMax, wyMin, wyMax } = bounds;
+    if (!line || !Number.isFinite(wxMin + wxMax + wyMin + wyMax) || wxMax <= wxMin || wyMax <= wyMin) return [];
+    if (line.type === 'vertical') {
+      if (!Number.isFinite(line.x) || line.x < wxMin || line.x > wxMax) return [];
+      return [
+        { x: line.x, y: wyMin, parameterValue: wyMin },
+        { x: line.x, y: wyMax, parameterValue: wyMax },
+      ];
+    }
+    if (!Number.isFinite(line.x) || !Number.isFinite(line.y) || !Number.isFinite(line.slope)) return [];
+    return [
+      { x: wxMin, y: tangentLineY(line, wxMin), parameterValue: wxMin },
+      { x: wxMax, y: tangentLineY(line, wxMax), parameterValue: wxMax },
+    ].filter(point => Number.isFinite(point.y));
+  }
+
   function buildVisiblePolylineCurves(functions, bounds, sampleCount, worldToScreen, size, params = {}) {
     return functions
-      .filter(fn => fn.visible && fn.compiled && ['explicit', 'parametric', 'polar'].includes(fn.compiled.kind))
+      .filter(fn => fn.visible && fn.compiled && (isTangentCurve(fn) || ['explicit', 'parametric', 'polar'].includes(fn.compiled.kind)))
       .map((fn) => {
         const samples = samplePolylineWorldPoints(fn, bounds, sampleCount, params);
         const segments = [];
@@ -373,7 +400,7 @@
           ) anchor = { sx, sy };
           if (previous) {
             const dist = Math.hypot(sx - previous.sx, sy - previous.sy);
-            if (Math.abs(sy - previous.sy) <= size.h * 1.5 && dist <= Math.max(size.w, size.h) * 1.5) {
+            if (isTangentCurve(fn) || (Math.abs(sy - previous.sy) <= size.h * 1.5 && dist <= Math.max(size.w, size.h) * 1.5)) {
               segments.push({
                 ax: previous.x, ay: previous.y, bx: sample.x, by: sample.y,
                 asx: previous.sx, asy: previous.sy, bsx: sx, bsy: sy,
@@ -469,16 +496,31 @@
 
   function intersectSegmentCollections(left, right, xTol, yTol) {
     const points = [];
-    left.segments.forEach((segmentA) => {
-      right.segments.forEach((segmentB) => {
+    const decorate = (segments) => segments.map((segment) => ({
+      ...segment,
+      minX: Math.min(segment.ax, segment.bx),
+      maxX: Math.max(segment.ax, segment.bx),
+      minY: Math.min(segment.ay, segment.by),
+      maxY: Math.max(segment.ay, segment.by),
+    }));
+    let leftSegments = decorate(left.segments);
+    let rightSegments = decorate(right.segments).sort((a, b) => a.minX - b.minX);
+    if (leftSegments.length > rightSegments.length) {
+      [leftSegments, rightSegments] = [rightSegments, leftSegments];
+      [left, right] = [right, left];
+    }
+    rightSegments.sort((a, b) => a.minX - b.minX);
+    leftSegments.forEach((segmentA) => {
+      for (const segmentB of rightSegments) {
+        if (segmentB.minX > segmentA.maxX + xTol) break;
         if (
-          Math.max(segmentA.ax, segmentA.bx) < Math.min(segmentB.ax, segmentB.bx) - xTol ||
-          Math.max(segmentB.ax, segmentB.bx) < Math.min(segmentA.ax, segmentA.bx) - xTol ||
-          Math.max(segmentA.ay, segmentA.by) < Math.min(segmentB.ay, segmentB.by) - yTol ||
-          Math.max(segmentB.ay, segmentB.by) < Math.min(segmentA.ay, segmentA.by) - yTol
-        ) return;
+          segmentA.maxX < segmentB.minX - xTol ||
+          segmentB.maxX < segmentA.minX - xTol ||
+          segmentA.maxY < segmentB.minY - yTol ||
+          segmentB.maxY < segmentA.minY - yTol
+        ) continue;
         const hit = segmentIntersection(segmentA, segmentB, Math.max(xTol, yTol) * 0.25);
-        if (!hit || !Number.isFinite(hit.x) || !Number.isFinite(hit.y)) return;
+        if (!hit || !Number.isFinite(hit.x) || !Number.isFinite(hit.y)) continue;
         points.push({
           type: 'intersection',
           x: hit.x,
@@ -490,9 +532,9 @@
           label: left.label,
           label2: right.label,
         });
-      });
+      }
     });
-    return points;
+    return dedupePoints(points, xTol * 2, yTol * 2);
   }
 
   function intersectExplicitAndImplicit(explicitCurve, implicitCurve, xMin, xMax, sampleCount, yTol, params = {}) {
@@ -527,6 +569,10 @@
   }
 
   function curveResidualAtPoint(curve, x, y, params = {}) {
+    if (isTangentCurve(curve)) {
+      const residual = tangentLineResidual(curve.line, x, y);
+      return Number.isFinite(residual) ? Math.abs(residual) : NaN;
+    }
     const compiled = curve?.compiled;
     if (!compiled) return NaN;
     if (compiled.kind === 'explicit') {
@@ -538,6 +584,136 @@
       return Number.isFinite(value) ? Math.abs(value) : NaN;
     }
     return NaN;
+  }
+
+  function tangentLineResidual(line, x, y) {
+    if (!line || !Number.isFinite(x) || !Number.isFinite(y)) return NaN;
+    if (line.type === 'vertical') return Number.isFinite(line.x) ? x - line.x : NaN;
+    const expectedY = tangentLineY(line, x);
+    return Number.isFinite(expectedY) ? y - expectedY : NaN;
+  }
+
+  function decorateIntersection(left, right, x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return {
+      type: 'intersection',
+      x,
+      y,
+      color: left.color,
+      color2: right.color,
+      fnId: left.id,
+      fn2Id: right.id,
+      label: left.label,
+      label2: right.label,
+    };
+  }
+
+  function tangentOwnerContact(tangentCurve, ownerCurve) {
+    const point = tangentCurve?.tangentPoint;
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return [];
+    const hit = decorateIntersection(tangentCurve, ownerCurve, point.x, point.y);
+    return hit ? [hit] : [];
+  }
+
+  function intersectTangentLines(left, right) {
+    const a = left.line;
+    const b = right.line;
+    if (!a || !b) return [];
+    let x;
+    let y;
+    if (a.type === 'vertical' && b.type === 'vertical') return [];
+    if (a.type === 'vertical') {
+      x = a.x;
+      y = tangentLineY(b, x);
+    } else if (b.type === 'vertical') {
+      x = b.x;
+      y = tangentLineY(a, x);
+    } else {
+      const denom = a.slope - b.slope;
+      if (!Number.isFinite(denom) || Math.abs(denom) < 1e-10) return [];
+      x = (b.y - a.y + a.slope * a.x - b.slope * b.x) / denom;
+      y = tangentLineY(a, x);
+    }
+    const hit = decorateIntersection(left, right, x, y);
+    return hit ? [hit] : [];
+  }
+
+  function intersectTangentWithExplicit(tangentCurve, curve, xMin, xMax, sampleCount, xTol, yTol, params = {}) {
+    const line = tangentCurve.line;
+    const domain = getCurveAxisRange(curve.compiled, 'x', xMin, xMax, params);
+    if (!(domain.max > domain.min)) return [];
+    if (line.type === 'vertical') {
+      if (line.x < domain.min - xTol || line.x > domain.max + xTol) return [];
+      const y = evaluateExplicitSafe(curve.compiled, line.x, params);
+      const hit = decorateIntersection(tangentCurve, curve, line.x, y);
+      return hit ? [hit] : [];
+    }
+    const diff = (x) => evaluateExplicitSafe(curve.compiled, x, params) - tangentLineY(line, x);
+    return scanRoots(diff, domain.min, domain.max, sampleCount, yTol).map((x) => {
+      const y = evaluateExplicitSafe(curve.compiled, x, params);
+      return decorateIntersection(tangentCurve, curve, x, y);
+    }).filter(Boolean);
+  }
+
+  function intersectTangentWithSampled(tangentCurve, curve, sampleCount, xTol, yTol, params = {}) {
+    const line = tangentCurve.line;
+    const range = getCurveParameterRange(curve.compiled, params);
+    if (!(range.max > range.min)) return [];
+    const residualTol = line.type === 'vertical' ? xTol : yTol;
+    const residual = (parameterValue) => {
+      const point = evaluateCurvePointSafe(curve.compiled, parameterValue, params);
+      return point ? tangentLineResidual(line, point.x, point.y) : NaN;
+    };
+    return scanRoots(residual, range.min, range.max, sampleCount, residualTol).map((parameterValue) => {
+      const point = evaluateCurvePointSafe(curve.compiled, parameterValue, params);
+      return point ? decorateIntersection(tangentCurve, curve, point.x, point.y) : null;
+    }).filter(Boolean);
+  }
+
+  function intersectTangentWithImplicit(tangentCurve, curve, xMin, xMax, yMin, yMax, sampleCount, xTol, yTol, params = {}) {
+    const line = tangentCurve.line;
+    const ranges = getResolvedRanges(curve.compiled, params);
+    if (line.type === 'vertical') {
+      if (ranges.x && (line.x < ranges.x.min - xTol || line.x > ranges.x.max + xTol)) return [];
+      const yRange = ranges.y || { min: yMin, max: yMax };
+      const min = Math.max(yMin, yRange.min);
+      const max = Math.min(yMax, yRange.max);
+      if (!(max > min)) return [];
+      return scanRoots((y) => evaluateImplicitSafe(curve.compiled, line.x, y, params), min, max, sampleCount, yTol).map((y) => (
+        decorateIntersection(tangentCurve, curve, line.x, y)
+      )).filter(Boolean);
+    }
+    const xRange = ranges.x || { min: xMin, max: xMax };
+    const yRange = ranges.y;
+    const min = Math.max(xMin, xRange.min);
+    const max = Math.min(xMax, xRange.max);
+    if (!(max > min)) return [];
+    const residual = (x) => {
+      const y = tangentLineY(line, x);
+      if (!Number.isFinite(y) || (yRange && (y < yRange.min || y > yRange.max))) return NaN;
+      return evaluateImplicitSafe(curve.compiled, x, y, params);
+    };
+    return scanRoots(residual, min, max, sampleCount, yTol).map((x) => {
+      const y = tangentLineY(line, x);
+      return decorateIntersection(tangentCurve, curve, x, y);
+    }).filter(Boolean);
+  }
+
+  function intersectTangentWithCurve(tangentCurve, curve, xMin, xMax, yMin, yMax, sampleCount, xTol, yTol, params = {}) {
+    if (!tangentCurve?.visible || !curve?.visible || tangentCurve.id === curve.id) return [];
+    if (tangentCurve.ownerId && tangentCurve.ownerId === curve.id) return tangentOwnerContact(tangentCurve, curve);
+    if (isTangentCurve(curve)) return intersectTangentLines(tangentCurve, curve);
+    if (!curve.compiled) return [];
+    if (curve.compiled.kind === 'explicit') {
+      return intersectTangentWithExplicit(tangentCurve, curve, xMin, xMax, sampleCount, xTol, yTol, params);
+    }
+    if (curve.compiled.kind === 'parametric' || curve.compiled.kind === 'polar') {
+      return intersectTangentWithSampled(tangentCurve, curve, sampleCount, xTol, yTol, params);
+    }
+    if (curve.compiled.kind === 'implicit') {
+      return intersectTangentWithImplicit(tangentCurve, curve, xMin, xMax, yMin, yMax, sampleCount, xTol, yTol, params);
+    }
+    return [];
   }
 
   function mergeIntersectionPoints(points, xTol, yTol, curvesById, params = {}) {
@@ -624,9 +800,12 @@
   }
 
   function computeSpecialPoints(featureFunctions, curves, polylineCurves, implicitCurves, xMin, xMax, yMin, yMax, scaleX, scaleY, width, height, params = {}) {
-    const visibleExplicit = curves.filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit');
+    const visibleTangentCurves = curves.filter(isTangentCurve).filter(fn => fn.visible);
+    const visibleBaseCurves = curves.filter(fn => !isTangentCurve(fn));
+    const visibleExplicit = visibleBaseCurves.filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'explicit');
     const sampledCurves = polylineCurves || [];
-    const visibleImplicit = implicitCurves || [];
+    const analysisSampledCurves = sampledCurves.filter(fn => !isTangentCurve(fn));
+    const visibleImplicit = (implicitCurves || []).filter(fn => !isTangentCurve(fn));
     if (!sampledCurves.length && !visibleImplicit.length) return [];
     if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || xMax <= xMin) return [];
     const sampleCount = Math.max(320, Math.min(1600, Math.floor(width * 1.5)));
@@ -711,6 +890,38 @@
       });
     });
 
+    for (let i = 0; i < visibleTangentCurves.length; i++) {
+      const tangentCurve = visibleTangentCurves[i];
+      visibleBaseCurves.forEach((curve) => {
+        points.push(...intersectTangentWithCurve(
+          tangentCurve,
+          curve,
+          xMin,
+          xMax,
+          yMin,
+          yMax,
+          Math.min(sampleCount, 900),
+          xTol,
+          yTol,
+          params,
+        ));
+      });
+      for (let j = i + 1; j < visibleTangentCurves.length; j++) {
+        points.push(...intersectTangentWithCurve(
+          tangentCurve,
+          visibleTangentCurves[j],
+          xMin,
+          xMax,
+          yMin,
+          yMax,
+          Math.min(sampleCount, 900),
+          xTol,
+          yTol,
+          params,
+        ));
+      }
+    }
+
     points.push(...intersectImplicitCurves(
       visibleImplicit,
       xTol,
@@ -718,7 +929,7 @@
       params,
     ));
 
-    const genericCurves = [...sampledCurves, ...visibleImplicit];
+    const genericCurves = [...analysisSampledCurves, ...visibleImplicit];
     for (let i = 0; i < genericCurves.length; i++) {
       for (let j = i + 1; j < genericCurves.length; j++) {
         if (genericCurves[i].compiled.kind === 'explicit' && genericCurves[j].compiled.kind === 'explicit') continue;
@@ -737,7 +948,7 @@
       xTol,
       yTol * 3,
     );
-    const curvesById = new Map([...sampledCurves, ...visibleImplicit].map(curve => [curve.id, curve]));
+    const curvesById = new Map([...sampledCurves, ...visibleImplicit, ...visibleTangentCurves].map(curve => [curve.id, curve]));
     const intersections = mergeIntersectionPoints(
       visiblePoints.filter(point => point.type === 'intersection'),
       Math.max(xTol, 4 / Math.max(scaleX, 1)),
@@ -837,7 +1048,7 @@
 
   function sampleVisibleImplicitCurves(functions, bounds, cols, rows, params = {}) {
     return functions
-      .filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'implicit')
+      .filter(fn => fn.visible && fn.compiled && fn.compiled.kind === 'implicit' && !isTangentCurve(fn))
       .map(fn => ({ ...fn, segments: sampleImplicitSegments(fn.compiled, bounds, cols, rows, params) }))
       .filter(fn => fn.segments.length);
   }
